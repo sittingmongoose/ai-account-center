@@ -307,6 +307,57 @@ export const tests = {
 		await t.audit('web-session paste phone 390');
 	},
 
+	// Device pass r45: Remove wallet did nothing (its action kind was missing from the frame's page actions, so the tap
+	// was dropped). This one CLICKS it and expects the DELETE and the toast, and checks the row's layout: one trash
+	// (the key's own Remove), and Remove wallet beside Reconnect wallet, never in the name line.
+	async 'accounts: OpenCode Go Remove wallet sends the DELETE and the row keeps one trash at phone 402x874'(t) {
+		await t.newContext({ viewport: { width: 402, height: 874 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+		const sent = [];
+		await t.page.route('**/api/accounts/web-session/**', async (route) => {
+			const req = route.request();
+			sent.push({ method: req.method(), url: req.url(), body: JSON.parse(req.postData() || '{}') });
+			await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'cache-control': 'no-store' }, body: JSON.stringify({ ok: true, deleted: true }) });
+		});
+		await openStubbedAccounts(t);
+		const id = 'opencode-go:acct:9f2c41d0';
+		const r = `.route:not([hidden]) .acc-item[data-row="${id}"]`;
+		await t.page.locator(r).scrollIntoViewIfNeeded();
+		const layout = await t.page.evaluate((r) => {
+			const box = (el) => el && el.getBoundingClientRect();
+			const item = document.querySelector(r);
+			const trashPath = item.querySelector('[data-probe^="remove:"] svg')?.innerHTML || '';
+			const trashes = [...item.querySelectorAll('svg')].filter((svg) => trashPath && svg.innerHTML === trashPath).length;
+			const wallet = item.querySelector('[data-probe^="remove-wallet:"]');
+			const reconnect = item.querySelector('[data-probe^="paste-session:"]');
+			const name = item.querySelector('.acc-email');
+			return {
+				trashes,
+				walletText: wallet?.textContent.trim(),
+				walletInTrashCell: !!wallet?.closest('.acc-trash'),
+				walletInActs: !!wallet?.closest('.acc-acts'),
+				sameLine: !!wallet && !!reconnect && Math.abs(box(wallet).top - box(reconnect).top) < 2,
+				nameLines: name ? Math.round(box(name).height / (parseFloat(getComputedStyle(name).lineHeight) || 18)) : 0,
+				overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+			};
+		}, r);
+		await t.equal('the row has exactly one trash icon, the key\'s own Remove', layout.trashes, 1);
+		await t.equal('the wallet control is labelled Remove wallet', layout.walletText, 'Remove wallet');
+		await t.check('Remove wallet sits in the action area, not the name line', layout.walletInActs && !layout.walletInTrashCell, JSON.stringify(layout));
+		await t.check('Remove wallet sits beside Reconnect wallet', layout.sameLine, JSON.stringify(layout));
+		await t.equal('the key\'s name stays on one line', layout.nameLines, 1);
+		await t.check('no sideways overflow', !layout.overflow, JSON.stringify(layout));
+		await t.crop('accounts-opencode-go-rows-phone-402', '.route:not([hidden]) .prov[data-provider="opencode-go"]', 'phone 402: OpenCode Go key rows, one trash each, Remove wallet beside Reconnect wallet');
+		await t.page.click(`${r} [data-probe="remove-wallet:${id}"]`);
+		await t.until('the removal toast', () => [...document.querySelectorAll('.toast')].some((el) => /wallet session removed/.test(el.textContent)), null, { timeout: 10000, hard: true });
+		await t.equal('one DELETE for this key\'s wallet session', JSON.stringify(sent.map((s) => [s.method, new URL(s.url).pathname, s.body.accountId])),
+			JSON.stringify([['DELETE', '/api/accounts/web-session/opencode-wallet', id]]));
+		// the paste flow says which key it is for
+		await t.page.click(`${r} [data-probe="paste-session:${id}"]`);
+		await t.until('the paste flow names its key', () => /Paste wallet session for Key 9f2c41d0/.test(document.querySelector('.route:not([hidden]) [data-probe="flow:opencode-go"]')?.textContent || ''), null, { timeout: 10000, hard: true });
+		const cookie = await t.page.evaluate(() => { const el = document.querySelector('.route:not([hidden]) [data-probe="flow-input:opencode-go"]'); return el ? parseFloat(getComputedStyle(el).fontSize) : 0; });
+		await t.check('the Cookie field is 16px on a touch screen, so iOS never zooms', cookie >= 16, String(cookie));
+	},
+
 	// The deliverable screenshots (402x874): one OpenCode Go card with its wallet
 	// balance line inside the card, and the same card with no console session.
 	// A pasted session whose read failed with nothing cached reads Wallet Unavailable.

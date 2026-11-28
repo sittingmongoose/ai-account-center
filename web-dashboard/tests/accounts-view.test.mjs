@@ -2799,11 +2799,16 @@ test('webSession capability renders write-only paste controls, masked password f
   assert.equal(walletRow.src, 'API key ending x7Qa');
   assert.deepEqual(walletRow.actions.map(a => [a.act, a.label, a.enabled]), [
     ['replace-key', 'Replace key', true],
-    ['remove', 'Remove', true],
     ['paste-session', 'Reconnect wallet', true],
-    ['remove-wallet', 'Remove wallet session', true],
+    ['remove-wallet', 'Remove wallet', true],
+    ['remove', 'Remove', true],
   ]);
-  assert.ok(walletRow.actions[2].value === 'opencode-go:acct:9f2c41d0');
+  assert.ok(walletRow.actions[1].value === 'opencode-go:acct:9f2c41d0');
+  // Device pass r45: one trash per row, the key's own Remove, kept last so the narrow card sets it beside the name;
+  // Remove wallet is a compact button with its own icon in the action area beside Reconnect wallet.
+  assert.deepEqual(walletRow.actions.filter(a => a.icon === 'trash').map(a => a.act), ['remove']);
+  assert.equal(walletRow.actions.at(-1).act, 'remove');
+  assert.deepEqual([walletRow.actions[2].kind, walletRow.actions[2].icon], ['button', 'close']);
   assert.ok(provider(vm, 'opencode-go').foot.every(a => a.act !== 'paste-session'));
   assert.ok(provider(vm, 'opencode-go').foot.some(a => a.act === 'add-key'));
   const museRow = row(vm, 'muse:usage');
@@ -2899,8 +2904,12 @@ test('a stored wallet session whose card shows no Wallet line can still be recon
   const vm = accountsViewModel(data([key], { providers: wsProviders }), { now, registry: reg });
   assert.deepEqual(row(vm, 'opencode-go:acct:9f2c41d0').actions.filter(a => a.act.includes('wallet') || a.act === 'paste-session').map(a => [a.act, a.label, a.enabled]), [
     ['paste-session', 'Reconnect wallet', true],
-    ['remove-wallet', 'Remove wallet session', true],
+    ['remove-wallet', 'Remove wallet', true],
   ]);
+  // Device pass r45: the paste flow opened from a key's row says which key it is for.
+  const flowVm = accountsViewModel(data([{ ...key, email: 'opencode.go@example.invalid', label: null }], { providers: wsProviders }),
+    { now, registry: reg, flows: { 'opencode-go': { type: 'web-session', step: 'paste', surface: 'opencode-wallet', accountId: 'opencode-go:acct:9f2c41d0' } } });
+  assert.equal(provider(flowVm, 'opencode-go').flow.title, 'Paste wallet session for opencode.go@example.invalid');
   // No stored session: only the paste control.
   const bare = { ...key, capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] } };
   const plain = accountsViewModel(data([bare], { providers: wsProviders }), { now, registry: reg });

@@ -487,7 +487,28 @@ export const tests = {
 			const name = document.querySelector(`${s.row} .acc-email`)?.getBoundingClientRect();
 			return !!button && !!name && button.top < name.bottom && button.bottom > name.top;
 		}, sel));
+		// Device pass r45: the pencil beside a long name keeps the name on one line (an ellipsis when it must) and sits
+		// right after it, not at the far end of the row.
+		const nameLine = await t.page.evaluate((r) => {
+			const name = document.querySelector(`${r} .acc-email`);
+			const pen = document.querySelector(`${r} [data-probe^="rename:"]`);
+			if (!name || !pen) return null;
+			const a = name.getBoundingClientRect();
+			const b = pen.getBoundingClientRect();
+			const lh = parseFloat(getComputedStyle(name).lineHeight) || 18;
+			return { height: a.height, lh, gap: b.left - a.right, title: name.getAttribute('title') };
+		}, row('claude:three'));
+		await t.check('a long name stays on one line beside its pencil', !!nameLine && nameLine.height < nameLine.lh * 1.5, JSON.stringify(nameLine));
+		await t.check('the pencil sits right after the name', !!nameLine && nameLine.gap >= -1 && nameLine.gap <= 8, JSON.stringify(nameLine));
+		await t.equal('the full name is the title of a name cut short', nameLine?.title, 'third-claude-with-a-long-name@example.invalid');
 		await pencil('first open');
+		// Device pass r45: iOS zooms the page on a text field under 16px and keeps the zoom after it closes.
+		const field = await t.page.evaluate((s) => {
+			const el = document.querySelector(s.input);
+			return el ? { size: parseFloat(getComputedStyle(el).fontSize), height: el.getBoundingClientRect().height } : null;
+		}, sel);
+		await t.check('the rename field is 16px on a touch screen, so iOS never zooms', !!field && field.size >= 16, JSON.stringify(field));
+		await t.check('and the field stays a single short line', !!field && field.height <= 32, JSON.stringify(field));
 		await t.snap('accounts-rename-open-402x874');
 		// an empty name is refused where it is typed, sending nothing
 		await t.page.fill(sel.input, '   ');

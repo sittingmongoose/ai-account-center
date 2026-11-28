@@ -138,7 +138,9 @@ function openCodeWalletActions(provider, account, entry) {
   const pasted = hasOpenCodeWalletSession(account);
   const fields = { act: 'paste-session', value: account.id, label: pasted ? 'Reconnect wallet' : 'Paste wallet session', icon: 'key', style: pasted ? 'accent-line' : 'ghost', probe: `paste-session:${account.id}` };
   const list = [gated(fields, ws, 'Paste an opencode.ai/console Cookie header once on a trusted connection for Zen prepaid wallet balance; never shown again.')];
-  if (pasted) list.push(action({ act: 'remove-wallet', value: account.id, label: 'Remove wallet session', icon: 'trash', style: 'ghost', probe: `remove-wallet:${account.id}`, enabled: true, tip: 'Remove this account’s pasted console session. The API key is not changed.' }));
+  // Not a trash icon: the row's one trash is the key's own Remove, which stays last (the narrow card puts it beside the
+  // name), and this compact button sits in the action area beside Reconnect wallet (device pass r45).
+  if (pasted) list.push(action({ act: 'remove-wallet', value: account.id, label: 'Remove wallet', icon: 'close', style: 'ghost', probe: `remove-wallet:${account.id}`, enabled: true, tip: 'Remove this account’s pasted console session. The API key is not changed.' }));
   return list;
 }
 
@@ -307,8 +309,8 @@ function rowActions(provider, account, homeRow, ctx) {
         const live = LIVE.recheck && (reg?.credential?.kind === 'stored-key' ? storedKey.actions?.recheck === true : storedKey.actions?.recheck !== false);
         return [live ? action({ ...check, enabled: true, tip: 'Read this stored key again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
-        action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
-          tip: `Stored on ${host} outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.${unnamed > 1 ? ' Removing it here would stop reading every stored key no account names.' : ''}` }), ...wallet];
+        ...wallet, action({ kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}`, enabled: false,
+          tip: `Stored on ${host} outside the dashboard (OMP, OpenCode or the environment). Remove it there to stop reading it.${unnamed > 1 ? ' Removing it here would stop reading every stored key no account names.' : ''}` })];
       }
       // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
       if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
@@ -316,7 +318,7 @@ function rowActions(provider, account, homeRow, ctx) {
         const live = LIVE.recheck && reg.actions?.recheck !== false;
         return [live ? action({ ...check, enabled: true, tip: 'Read the session again now.' })
           : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
-        removeControl(provider, account, reg, entry), ...wallet];
+        ...wallet, removeControl(provider, account, reg, entry)];
       }
       const g = gate(entry, 'replaceKey', provider);
       const fields = { act: 'replace-key', value: account.id, label: 'Replace key', icon: 'key', style: 'accent-line', probe: `replace-key:${account.id}` };
@@ -325,7 +327,7 @@ function rowActions(provider, account, homeRow, ctx) {
       else if (!reg) replace = action({ ...fields, enabled: false, tip: 'Checking what this account can do' });
       else if (reg.actions?.replaceKey !== true) replace = action({ ...fields, enabled: false, tip: 'Replacing this key is not possible now.' });
       else replace = action({ ...fields, enabled: true, tip: 'Store a new key; it is checked first and the old one stays if it is refused.' });
-      return [replace, removeControl(provider, account, reg, entry), ...wallet];
+      return [replace, ...wallet, removeControl(provider, account, reg, entry)];
     }
     case 'browser': {
       const ws = webSessionGate(entry, provider);
@@ -1249,7 +1251,8 @@ export function accountsViewModel(data, ctx = {}) {
       slots: def.slots, actsMin: def.actsMin,
       how, needs: !!needs, foot: footActions(entry.id, mine, c),
       empty: count ? '' : `No ${entry.label} accounts yet.`,
-      flow: flowView(entry.id, c.flows?.[entry.id], { now, trustNote, busyAct: c.busyAct }),
+      // data lets a row-bound flow name its account ("Paste wallet session for ...", device pass r45)
+      flow: flowView(entry.id, c.flows?.[entry.id], { now, trustNote, busyAct: c.busyAct, data }),
       trash: entry.id === 'claude' ? trashRows(ctx.registry?.trash, c, now) : [],
       rows,
     };

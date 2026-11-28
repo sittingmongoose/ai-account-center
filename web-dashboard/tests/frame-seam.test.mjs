@@ -2,6 +2,7 @@
 // and the Analytics controls, never sign-in, the frame's own commands or the retired canvas's reports.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { PAGE_ACTIONS } from '../public/frame-seam.mjs';
 import { MUTATING_ACTIONS } from '../public/accounts-controller.mjs';
 
@@ -29,4 +30,15 @@ test('the Analytics page controls are page actions; its refresh is the frame\'s 
     assert.ok(PAGE_ACTIONS.has(kind), kind);
   }
   assert.equal(PAGE_ACTIONS.has('analytics-refresh'), false);
+});
+
+// Device pass r45: the OpenCode Go row's Remove wallet sent `remove-wallet`, which this list lacked, so the frame
+// dropped the tap before the controller ran it. Every kind the Accounts controller handles must be a page action.
+test('every action the Accounts controller handles is a page action, so no row control is dropped', () => {
+  const source = readFileSync(new URL('../public/accounts-controller.mjs', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('async function handle(action, value)'), source.indexOf('function reset()'));
+  const kinds = [...body.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]);
+  assert.ok(kinds.length > 40, `found ${kinds.length} handled kinds`);
+  for (const kind of kinds) assert.ok(PAGE_ACTIONS.has(kind), `${kind} is a page action`);
+  assert.ok(PAGE_ACTIONS.has('remove-wallet'));
 });

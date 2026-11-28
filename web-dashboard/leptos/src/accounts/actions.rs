@@ -126,6 +126,7 @@ pub fn ActionControl(
 pub fn icon_name(name: &str) -> &'static str {
     match name {
         "trash" => "trash",
+        "close" => "close",
         "login" => "login",
         "logout" => "logout",
         "key" => "key",
@@ -186,5 +187,19 @@ pub fn ReasonLine(reason: RwSignal<String>) -> impl IntoView {
                 <p class="rl-text">{move || reason.get()}</p>
             </div>
         </Show>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::icon_name;
+
+    // Device pass r45: Remove wallet draws a close mark, so the key's own Remove is the row's one trash; an unmapped
+    // name would fall back to the info glyph.
+    #[test]
+    fn remove_wallet_draws_a_close_mark_not_a_second_trash() {
+        assert_eq!(icon_name("close"), "close");
+        assert_eq!(icon_name("trash"), "trash");
+        assert_eq!(icon_name("no-such-icon"), "info");
     }
 }

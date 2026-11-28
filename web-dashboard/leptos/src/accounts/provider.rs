@@ -309,7 +309,7 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                     </Show>
                     <Show when=move || !editing.get()>
                         <span class="acc-name-line">
-                            <span class="acc-email">{move || email_parts(get().email)}</span>
+                            <span class="acc-email" title=move || get().email>{move || email_parts(get().email)}</span>
                             {move || (can_rename.get() && !gone.get()).then(|| view! {
                                 <button type="button" class="icon-btn bare acc-rename-btn"
                                     aria-label="Rename account" title="Rename"
@@ -371,7 +371,8 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     }
 }
 
-/// An email that may break after its `@` (and only mid-word when even that doesn't fit), never cut short.
+/// An email with a break chance after its `@`. The Accounts name line keeps it on one line and ends it in an ellipsis
+/// when it must (its full text is the title); other places may break it there.
 fn email_parts(email: String) -> impl IntoView {
     match email.split_once('@') {
         Some((local, domain)) => {

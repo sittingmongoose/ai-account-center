@@ -44,7 +44,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'account-rename', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
-  'flow-open-app', 'flow-recheck', 'web-session-pick', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
+  'flow-open-app', 'flow-recheck', 'web-session-pick', 'remove-wallet', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));

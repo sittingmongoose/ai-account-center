@@ -982,14 +982,21 @@ textarea.note::placeholder { color: var(--ink-4); }
 .acc-row > .acc-trash { order: 1; }
 .acc-row > .acc-info { flex: 1 1 100%; order: 2; }
 .acc-row > .acc-sw { order: 3; }
-.acc-row > .acc-acts { order: 4; margin-left: auto; }
+/* The actions join the switches' line one by one and wrap one by one, right-aligned, so a row with three buttons
+   (OpenCode Go: Replace key, Reconnect wallet, Remove wallet) takes two short lines, not three. */
+.acc-row { justify-content: flex-end; }
+.acc-row > .acc-acts { display: contents; }
+.acc-row > .acc-acts > * { order: 4; }
+.acc-row > .acc-sw { margin-right: auto; }
+.acc-row > .acc-trash { margin-left: -6px; }
 .acc-row:hover { background: var(--row-hover); }
 .acc-item.sel .acc-row { background: var(--row-sel); }
 .acc-id { grid-area: id; min-width: 0; }
 .acc-email { display: block; font-weight: 560; font-variation-settings: 'wght' 560; color: var(--ink); overflow-wrap: break-word; line-height: 1.3; }
 /* The inline rename: the pencil beside the name and the input that replaces it. */
+/* One line: the name ends in an ellipsis when it must, and the pencil sits right after it (device pass r45). */
 .acc-name-line { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.acc-name-line .acc-email { flex: 1 1 0; min-width: 0; }
+.acc-name-line .acc-email { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acc-rename-btn { width: 26px; height: 26px; flex: none; }
 .acc-rename-btn .ic { width: 13px; height: 13px; }
 .acc-rename { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -1007,7 +1014,9 @@ textarea.note::placeholder { color: var(--ink-4); }
 /* Two lines: the name and the actions, then the facts and the switches. */
 @container card (min-width: 440px) {
   .acc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "id acts trash" "info sw sw"; padding: 8px 14px; }
-  .acc-row > .acc-acts { margin-left: 0; }
+  .acc-row > .acc-acts { display: flex; margin-left: 0; }
+  .acc-row > .acc-sw { margin-right: 0; }
+  .acc-row > .acc-trash { margin-left: 0; }
   .acc-acts { flex-wrap: nowrap; }
   .acc-sw { justify-content: flex-end; }
 }
@@ -1235,6 +1244,8 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .ac-icon { width: 36px; height: 36px; }
   .tg { min-height: 32px; }
   .field-input, .ac-select { height: 40px; font-size: 16px; }
+  /* iOS zooms the page on any text field under 16px and keeps the zoom after it closes (device pass r45). */
+  .acc-rename-input { font-size: 16px; }
   .stepper { height: 36px; } .st-btn { width: 34px; height: 34px; }
 }
 
@@ -2674,20 +2685,18 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .hnote .ic { width: 14px; height: 14px; flex: none; margin-top: 1px; }
 .hamounts { display: grid; border-top: 1px solid var(--rule-2); }
 @container hcard (min-width: 620px) { .hamounts { grid-template-columns: 1fr 1fr; column-gap: 26px; } }
-.hamount { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--rule-2); }
+.hamount { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 1px 10px; padding: 7px 0; border-bottom: 1px dashed var(--rule-2); }
 .hamount:last-child { border-bottom: 0; }
-.hamount dt { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--ink-2); font-size: var(--fs-small); }
-.hamount dt .ic { width: 15px; height: 15px; color: var(--ink-3); flex: none; }
-.hamount dd { text-align: right; font-size: 12.5px; }
+/* The label's text, not its icon, gives the line its baseline, so the value sits level with the label (r45). */
+.hamount dt { display: flex; align-items: baseline; gap: 7px; min-width: 0; color: var(--ink-2); font-size: var(--fs-small); }
+.hamount dt .ic { width: 15px; height: 15px; color: var(--ink-3); flex: none; align-self: center; }
+.hamount dd { margin-left: auto; text-align: right; font-size: 12.5px; }
 .hamount dd b { color: var(--ink); }
 .hamount dd b.spent { color: var(--crit-text); }
 .hunit { margin-left: 3px; color: var(--ink-3); font-size: 88%; }
 .hamount dd small { display: block; color: var(--ink-3); font-size: var(--fs-tiny); }
-/* A narrow card puts an amount's value under its label, so neither is squeezed into a column of single words. */
-@container hcard (max-width: 259.98px) {
-  .hamount { flex-direction: column; align-items: stretch; gap: 1px; }
-  .hamount dd { text-align: left; padding-left: 22px; }
-}
+/* A narrow card keeps the label and value on one line when they fit ("Wallet $18.25") and wraps the value under its
+   label only when they do not, so neither is squeezed into a column of single words. */
 .hcard-foot { margin-top: auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding-top: 9px; border-top: 1px solid var(--rule-2);
   font-size: var(--fs-small); color: var(--ink-3); }
 .hcard-foot .sep { padding: 0; }
