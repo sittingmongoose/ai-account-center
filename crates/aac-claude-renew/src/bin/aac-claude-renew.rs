@@ -13,6 +13,7 @@
 
 use aac_claude_renew::browser::{SignInByMail, Waits};
 use aac_claude_renew::config::{self, Config};
+use aac_claude_renew::localread::LocalRead;
 use aac_claude_renew::remote::SshRemote;
 use aac_claude_renew::service::{self, Lock, Ran, RunOptions};
 use aac_claude_renew::state::State;
@@ -85,11 +86,13 @@ fn main() {
             let remote = SshRemote::plain();
             let log = service::logger(&dir, true);
             let now = now_ms;
+            let local = LocalRead::from_process();
             let deps = Deps {
                 remote: &remote,
                 now: &now,
                 log: &log,
                 waits: Waits::default(),
+                local: local.as_ref(),
             };
             let mut st = State::default();
             for (host, scan) in tick::scan_all(&cfg, &mut st, &deps) {
@@ -157,11 +160,13 @@ fn main() {
             let remote = SshRemote::plain();
             let log = service::logger(&dir, true);
             let now = now_ms;
+            let local = LocalRead::from_process();
             let deps = Deps {
                 remote: &remote,
                 now: &now,
                 log: &log,
                 waits: Waits::default(),
+                local: local.as_ref(),
             };
             let mut st = State::load(&state_path);
             st.accounts

@@ -2,6 +2,7 @@
 
 use crate::browser::Waits;
 use crate::config::{self, Config};
+use crate::localread::LocalRead;
 use crate::remote::SshRemote;
 use crate::state::State;
 use crate::tick::{self, Deps, Report};
@@ -116,11 +117,13 @@ pub fn run(ccs_dir: &Path, publish_default: Option<PathBuf>, options: RunOptions
         ));
     }
     let now = now_ms;
+    let local = LocalRead::from_process();
     let deps = Deps {
         remote: &remote,
         now: &now,
         log: &log,
         waits: Waits::default(),
+        local: local.as_ref(),
     };
     let mut st = State::load(&state_path);
     let only = options.only.as_ref().map(|(h, p)| (h.as_str(), p.as_str()));

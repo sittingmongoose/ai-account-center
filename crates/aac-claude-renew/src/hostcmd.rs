@@ -301,15 +301,17 @@ pub fn iso(ms: i64) -> String {
     )
 }
 
+/// An account email as the readings keep it: trimmed, lower case, and safe.
+pub fn clean_email(raw: &str) -> Option<String> {
+    Some(raw.trim().to_lowercase()).filter(|e| crate::config::safe_email(e))
+}
+
 /// Turns one `claude auth status --json` answer into a state, email and end.
 pub fn status_reading(json: &str) -> (SignIn, Option<String>, Option<i64>) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return (SignIn::NotSignedIn, None, None);
     };
-    let email = value["email"]
-        .as_str()
-        .map(|e| e.trim().to_lowercase())
-        .filter(|e| crate::config::safe_email(e));
+    let email = value["email"].as_str().and_then(clean_email);
     let ends = value["loginExpiresAt"].as_str().and_then(parse_iso_ms);
     let logged_in = value["loggedIn"].as_bool() == Some(true);
     let claude_ai = value["authMethod"]

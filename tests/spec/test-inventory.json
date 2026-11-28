@@ -388,6 +388,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-claude-renew/src/localread/tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-claude-renew/src/plan.rs",
       "kind": "internal",
       "evidence": [],

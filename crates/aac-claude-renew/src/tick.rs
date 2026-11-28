@@ -2,8 +2,9 @@
 //! due, keep each account's claude.ai browser session alive, and publish.
 
 use crate::browser::{Authorize, Browser, SignInByMail, Waits};
-use crate::config::{Config, Host};
+use crate::config::{Config, Host, Os};
 use crate::hostcmd::{self, Scan};
+use crate::localread::{LocalRead, Native};
 use crate::plan::{self, Due, Reading, SignIn, Verification};
 use crate::remote::Remote;
 use crate::state::State;
@@ -21,6 +22,9 @@ pub struct Deps<'a> {
     pub log: &'a dyn Fn(&str),
     /// Browser waits (tests shorten them).
     pub waits: Waits,
+    /// This computer's files, when its sign-ins may be read without the CLI
+    /// ([`crate::localread`]); `None` reads every computer with the CLI.
+    pub local: Option<&'a LocalRead>,
 }
 
 impl Deps<'_> {
@@ -38,8 +42,22 @@ const FINISH_SECS: u64 = 150;
 /// How often a browser session's end is read.
 const SESSION_CHECK_MS: i64 = 6 * HOUR_MS;
 
-/// Reads one computer.
+/// Reads one computer: this Linux computer from its files when they settle every profile
+/// ([`crate::localread`]), otherwise with `claude auth status --json` per profile.
 pub fn scan_host(cfg: &Config, deps: &Deps, host: &Host) -> Result<Scan, String> {
+    if host.ssh.is_none()
+        && host.os == Os::Linux
+        && let Some(local) = deps.local
+    {
+        match local.scan(host, &cfg.ignore_profiles, (deps.now)()) {
+            Native::Scan(scan) => return Ok(scan),
+            Native::NoClaude => return Err("claude_not_found".into()),
+            Native::Cli(why) => deps.say(&format!(
+                "{}: reading its sign-ins with the CLI ({why})",
+                host.name
+            )),
+        }
+    }
     let script = hostcmd::scan(host, &cfg.ignore_profiles);
     let out = deps
         .remote
@@ -673,6 +691,7 @@ mod tests {
             now: &now,
             log: &log,
             waits: fast(),
+            local: None,
         };
         let mut st = State::default();
         let report = tick(&cfg(), &mut st, &deps, None, false, false);
@@ -712,6 +731,7 @@ mod tests {
             now: &now,
             log: &log,
             waits: fast(),
+            local: None,
         };
         let mut st = State::default();
         assert_eq!(
@@ -747,6 +767,7 @@ mod tests {
             now: &now,
             log: &log,
             waits: fast(),
+            local: None,
         };
         let mut config = cfg();
         config.step3 = step3;
@@ -807,6 +828,7 @@ mod tests {
             now: &now,
             log: &log,
             waits: fast(),
+            local: None,
         };
         let mut config = cfg();
         config.step3 = Step3::RenewOnly("nas9".into());

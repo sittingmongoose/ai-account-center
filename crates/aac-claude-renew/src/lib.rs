@@ -19,14 +19,15 @@
 //!   code the page shows and types it into the login prompt. Accessibility is granted to ssh
 //!   sessions on the Mac and denied inside launchd jobs, so the server drives this over ssh.
 //! * **Proof by reading back.** Success means the saved end moved later, read again with
-//!   `claude auth status --json`; a later reading checks that no old process wrote the old
-//!   sign-in back ([`plan`]).
+//!   `claude auth status --json` (on this Linux computer, from the profile files the command
+//!   reads, without starting it: [`localread`]); a later reading checks that no old process
+//!   wrote the old sign-in back ([`plan`]).
 //!
 //! What replaces each job of the retired Python runner (`scripts/claude-signin`):
 //!
 //! | Python | Rust |
 //! | --- | --- |
-//! | `collect`/`_local-status` (reads credentials over ssh) | [`hostcmd::scan`]: `claude auth status --json` per profile |
+//! | `collect`/`_local-status` (reads credentials over ssh) | [`hostcmd::scan`]: `claude auth status --json` per profile; [`localread`] on this Linux computer |
 //! | `due_reason`, `backoff_ok`, `note_failure`, `note_captcha_wait`, `check_verification` | [`plan`] |
 //! | `renew_one` + `Prompt` (pty login) | [`tick::renew_one`] + [`remote::Session`] |
 //! | `browser_auth.mjs authorize` (DevTools protocol) | [`browser::Browser::authorize`] (plain Chrome + accessibility) |
@@ -43,6 +44,7 @@
 pub mod browser;
 pub mod config;
 pub mod hostcmd;
+pub mod localread;
 pub mod plan;
 pub mod publish;
 pub mod remote;
