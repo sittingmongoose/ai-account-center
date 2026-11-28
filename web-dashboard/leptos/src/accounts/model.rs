@@ -109,8 +109,12 @@ pub struct Row {
     pub id: String,
     #[serde(deserialize_with = "nullable")]
     pub provider: String,
+    /// The heading: the account's name, else its email, else its label.
     #[serde(deserialize_with = "nullable")]
     pub email: String,
+    /// The email line under a named account's heading, or empty.
+    #[serde(deserialize_with = "nullable")]
+    pub sub_email: String,
     #[serde(deserialize_with = "nullable")]
     pub meta: String,
     #[serde(deserialize_with = "nullable")]
@@ -130,6 +134,11 @@ pub struct Row {
     pub label: String,
     /// Whether the row's name can be edited (the server PATCH supports this account kind).
     pub can_rename: bool,
+    /// Whether the edit also offers an Email field: a registry account whose provider reports no email.
+    pub can_email: bool,
+    /// The email the owner typed for it (the Email field's seed), or empty.
+    #[serde(deserialize_with = "nullable")]
+    pub owner_email: String,
     #[serde(deserialize_with = "nullable")]
     pub actions: Vec<Action>,
     pub line: Line,
@@ -500,9 +509,72 @@ pub fn parse(json: &str) -> Result<Option<AccountsView>, &'static str> {
     Ok(Some(view))
 }
 
+/// The Email field beside a name, checked like account-actions.mjs `emailProblem` and the server: one `@`,
+/// a dot in the domain with something on both sides, no spaces or control characters, at most 254
+/// characters. Empty clears it, so it is fine.
+pub fn email_problem(email: &str) -> Option<&'static str> {
+    let value = email.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let shape = value.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty()
+            && !domain.contains('@')
+            && domain
+                .rsplit_once('.')
+                .is_some_and(|(name, suffix)| !name.is_empty() && !suffix.is_empty())
+    });
+    let odd = value.chars().any(|c| {
+        c.is_whitespace() || c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{feff}')
+    });
+    (!shape || odd || value.chars().count() > 254)
+        .then_some("That email does not look like name@example.com.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_carries_its_email_line_and_whether_it_takes_an_email() {
+        let row: Row = serde_json::from_str(
+            r#"{"id":"opencode-go:acct:0123abcd","email":"Account 2","subEmail":"go@example.com",
+                "canRename":true,"canEmail":true,"ownerEmail":"go@example.com"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (row.email.as_str(), row.sub_email.as_str()),
+            ("Account 2", "go@example.com")
+        );
+        assert!(row.can_email);
+        assert_eq!(row.owner_email, "go@example.com");
+        let plain: Row = serde_json::from_str(r#"{"id":"claude:work","subEmail":null}"#).unwrap();
+        assert_eq!((plain.sub_email.as_str(), plain.can_email), ("", false));
+    }
+
+    #[test]
+    fn the_email_field_takes_a_plain_email_or_nothing() {
+        for ok in [
+            "",
+            "  ",
+            "me@example.com",
+            " first.last+tag@sub.example.co ",
+        ] {
+            assert_eq!(email_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "me",
+            "me@example",
+            "@example.com",
+            "me@.",
+            "a b@example.com",
+            "a@b@example.com",
+            "me@example.com\u{7}",
+        ] {
+            assert!(email_problem(bad).is_some(), "{bad}");
+        }
+        assert!(email_problem(&format!("{}@example.com", "a".repeat(250))).is_some());
+    }
 
     #[test]
     fn a_row_keeps_its_label_and_whether_it_can_be_renamed() {

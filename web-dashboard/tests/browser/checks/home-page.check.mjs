@@ -325,6 +325,41 @@ export const tests = {
 
 	// home-stale-after-account-add: a key saved in another browser reaches the server, which broadcasts
 	// accounts-changed on /ws; Home must redraw on the hint alone, with no reload and no wait for the interval read.
+	async 'home: a named account is headed by its name over its email, on rows and cards, at 402 px'(t) {
+		await t.newContext({ viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
+		await t.app.signIn();
+		const data = homeAccounts();
+		// a renamed Claude profile, and an OpenCode Go key whose provider reports no email but the owner typed one
+		data.accounts.find((a) => a.id === 'claude:max-b').label = 'Work Claude';
+		const key = data.accounts.find((a) => a.provider === 'opencode-go');
+		Object.assign(key, { id: 'opencode-go:acct:0123abcd', label: 'Account 2', email: null, ownerEmail: 'go.key@example.invalid', providerLabel: 'OpenCode Go' });
+		await t.app.stub('/api/accounts/dashboard', data);
+		await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
+		await t.goto('/app/home?safe=0,0,34,0', { settleMs: 300 });
+		await t.until('Home is drawn', () => document.querySelectorAll('.home .hrow').length >= 4 && document.querySelectorAll('.hcard').length >= 6, null, { timeout: 60000, hard: true });
+		const named = await t.page.evaluate(() => {
+			const r = document.querySelector('.hrow[data-row="claude:max-b"]');
+			const plain = document.querySelector('.hrow[data-row="claude:pro-a"]');
+			return { head: r?.querySelector('.hemail')?.textContent, sub: r?.querySelector('.hsub')?.textContent, plainHead: plain?.querySelector('.hemail')?.textContent, plainSub: !!plain?.querySelector('.hsub') };
+		});
+		await t.equal('the renamed Claude row: name over email; an unnamed row keeps its email heading', named,
+			{ head: 'Work Claude', sub: 'second.claude.account@example.invalid', plainHead: 'a.very.long.example.name@example.invalid', plainSub: false });
+		const card = await t.page.evaluate(() => {
+			const c = [...document.querySelectorAll('.hcard')].find((el) => /Account 2/.test(el.textContent));
+			const id = c?.querySelector('.hcard-id');
+			const sub = c?.querySelector('.hcard-sub');
+			const lh = (el) => parseFloat(getComputedStyle(el).lineHeight) || 18;
+			return c ? { id: id?.textContent, sub: sub?.textContent, oneLine: !!id && !!sub && id.getBoundingClientRect().height < lh(id) * 1.5 && sub.getBoundingClientRect().height < lh(sub) * 1.5 } : null;
+		});
+		await t.equal('the OpenCode Go card: the key\'s name over the email the owner typed, each one line', card, { id: 'Account 2', sub: 'go.key@example.invalid', oneLine: true });
+		await t.check('the phone page never scrolls sideways', await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+		await t.page.evaluate(() => document.querySelector('.hrow[data-row="claude:max-b"]')?.scrollIntoView({ block: 'center' }));
+		await t.page.waitForTimeout(200);
+		await t.snap('name-heading-home-rows-402x874');
+		await t.page.evaluate(() => [...document.querySelectorAll('.hcard')].find((el) => /Account 2/.test(el.textContent))?.scrollIntoView({ block: 'center' }));
+		await t.snap('name-heading-home-cards-402x874');
+	},
+
 	async 'home: an accounts-changed hint redraws Home without a reload'(t) {
 		for (const f of [
 			{ name: 'desktop', width: 1440, height: 900 },

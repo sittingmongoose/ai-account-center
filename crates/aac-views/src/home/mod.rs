@@ -286,16 +286,34 @@ fn claude_sign_in_needed(account: Acc) -> String {
 }
 
 /// `text(email) || text(label) || fallback`.
-fn identity(account: Acc, fallback: &str) -> String {
-    let email = text(account.get("email"));
+/// view-model.mjs `accountName`: the name the owner gave the account is the heading and its email
+/// the line under it. A label that only repeats the email or the provider's name is no name; then
+/// the heading stays the email, else the label. `ownerEmail` (typed where the provider reports
+/// none) shows only without a provider email. Returns (heading, email line).
+fn account_name(account: Acc, fallback: &str) -> (String, String) {
+    let email = match text(account.get("email")) {
+        "" => text(account.get("ownerEmail")),
+        email => email,
+    };
     let label = text(account.get("label"));
-    if !email.is_empty() {
-        email.into()
+    let same =
+        |a: &str, b: &str| !a.is_empty() && !b.is_empty() && a.to_lowercase() == b.to_lowercase();
+    let named = !label.is_empty()
+        && !same(label, email)
+        && !same(label, text(account.get("providerLabel")));
+    let heading = if named {
+        label
+    } else if !email.is_empty() {
+        email
     } else if !label.is_empty() {
-        label.into()
+        label
     } else {
-        fallback.into()
-    }
+        fallback
+    };
+    (
+        heading.into(),
+        if named { email.into() } else { String::new() },
+    )
 }
 
 /// `account.sampledAt || account.fetchedAt`.
@@ -530,7 +548,8 @@ fn claude_section(
             id: text(account.get("id")).into(),
             provider: "claude".into(),
             profile: str_field(cap)?.unwrap_or("").into(),
-            email: identity(account, "Account identity unavailable"),
+            email: account_name(account, "Account identity unavailable").0,
+            sub_email: account_name(account, "").1,
             plan: plan.into(),
             meta: joined(&[plan_label(plan, None)?, middle, signed.clone(), renewal]),
             status: if signed.is_empty() {
@@ -704,7 +723,8 @@ fn codex_section(cx: &Ctx, accounts: &[Acc]) -> R<SectionView> {
             profile: str_field(get(account.get("capabilities"), "codexProfile"))?
                 .unwrap_or("")
                 .into(),
-            email: identity(account, "Account identity unavailable"),
+            email: account_name(account, "Account identity unavailable").0,
+            sub_email: account_name(account, "").1,
             plan: plan.into(),
             meta: joined(&[
                 plan_label(plan, None)?,
@@ -856,7 +876,8 @@ fn antigravity_section(
             id: id.into(),
             provider: "antigravity".into(),
             profile,
-            email: identity(account, "Account identity unavailable"),
+            email: account_name(account, "Account identity unavailable").0,
+            sub_email: account_name(account, "").1,
             plan: plan.into(),
             meta: joined(&[
                 plan.to_string(),
@@ -1027,7 +1048,8 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
             provider: provider.into(),
             account_id: text(account.get("id")).into(),
             label: label.into(),
-            identity: identity(account, "Identity unavailable"),
+            identity: account_name(account, "Identity unavailable").0,
+            identity_sub: account_name(account, "").1,
             plan,
             status: status.into(),
             source,

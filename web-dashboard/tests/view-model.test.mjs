@@ -16,6 +16,7 @@ import {
   resetClock,
   shortWindowLabel,
   isMaxPlan,
+  accountName,
 } from '../public/view-model.mjs';
 import { getDisplayTimeZone, setDisplayTimeZone, displayFormat } from '../public/time-format.mjs';
 
@@ -641,7 +642,9 @@ test('Details list every visible window, the amounts and the provenance of one a
     ]),
   ]);
   const details = detailsViewModel(d, 'claude:m', { now });
-  assert.equal(details.title, 'm@example.test');
+  // the fixture names it "Codex": the name is the title and the email a fact of its own
+  assert.equal(details.title, 'Codex');
+  assert.deepEqual(details.facts[0], { label: 'Email', value: 'm@example.test', mono: false });
   assert.deepEqual(
     details.meters.map((m) => m.label),
     ['5-hour usage', 'Weekly usage']
@@ -650,7 +653,7 @@ test('Details list every visible window, the amounts and the provenance of one a
   assert.match(details.note, /Fable usage is not reported yet/);
   assert.deepEqual(
     details.facts.map((f) => f.label),
-    ['Status', 'Sampled', 'Fetched', 'Source', 'Platform', 'Profile']
+    ['Email', 'Status', 'Sampled', 'Fetched', 'Source', 'Platform', 'Profile']
   );
   assert.equal(detailsViewModel(d, 'nope', { now }), null);
 });
@@ -1527,4 +1530,33 @@ test('the switching-era Active mark is gone: no live-login field or Active word 
     assert.doesNotMatch(details.state, /Active/, id);
     assert.equal(details.state, 'Live', id);
   }
+});
+
+test('an account name is the heading and its email the line under it, on Home rows, cards and Details', () => {
+  // the rule
+  assert.deepEqual(accountName({ label: 'Work', email: 'w@example.test', providerLabel: 'Codex' }), { heading: 'Work', email: 'w@example.test', named: true });
+  assert.deepEqual(accountName({ label: 'W@Example.test', email: 'w@example.test' }), { heading: 'w@example.test', email: '', named: false });
+  assert.deepEqual(accountName({ label: 'Cursor', email: null, providerLabel: 'Cursor' }), { heading: 'Cursor', email: '', named: false });
+  assert.deepEqual(accountName({ label: 'Cursor', email: null, ownerEmail: 'c@example.test', providerLabel: 'Cursor' }), { heading: 'c@example.test', email: '', named: false });
+  assert.deepEqual(accountName({ label: 'Key 9f2c41d0', email: null, providerLabel: 'OpenCode Go' }), { heading: 'Key 9f2c41d0', email: '', named: true });
+  // the provider's email wins over the owner's
+  assert.equal(accountName({ label: 'Work', email: 'real@example.test', ownerEmail: 'typed@example.test' }).email, 'real@example.test');
+  assert.deepEqual(accountName({}), { heading: 'Account identity unavailable', email: '', named: false });
+  const vm = dashboardViewModel(
+    data([
+      account({ id: 'codex:work', label: 'Work', email: 'w@example.test' }),
+      account({ id: 'codex:plain', label: 'p@example.test', email: 'p@example.test' }),
+      account({ id: 'opencode-go:acct:0123abcd', provider: 'opencode-go', providerLabel: 'OpenCode Go', label: 'Account 2', email: null, ownerEmail: 'go@example.test', capabilities: {} }),
+    ]),
+    { now }
+  );
+  const codex = section(vm, 'codex');
+  const byId = Object.fromEntries(codex.rows.map((r) => [r.id, r]));
+  assert.deepEqual([byId['codex:work'].email, byId['codex:work'].subEmail], ['Work', 'w@example.test']);
+  assert.deepEqual([byId['codex:plain'].email, byId['codex:plain'].subEmail], ['p@example.test', '']);
+  const card = vm.cards.find((c) => c.id === 'opencode-go:acct:0123abcd');
+  assert.deepEqual([card.identity, card.identitySub], ['Account 2', 'go@example.test']);
+  const details = detailsViewModel(data([account({ id: 'codex:work', label: 'Work', email: 'w@example.test' })]), 'codex:work', { now });
+  assert.equal(details.title, 'Work');
+  assert.deepEqual(details.facts[0], { label: 'Email', value: 'w@example.test', mono: false });
 });

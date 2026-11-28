@@ -1,7 +1,7 @@
 // What each control sends and what each answer means (public/account-actions.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand, labelProblem } from '../public/account-actions.mjs';
+import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand, labelProblem, emailProblem } from '../public/account-actions.mjs';
 
 const err = (status, code, extra = {}) => ({ status, payload: { error: 'server sentence', code, ...extra } });
 
@@ -245,4 +245,14 @@ test('web-session requests, local validation, and calm error messages cover Qwen
     assert.match(`${out.title} ${out.body}`, match, code);
     assert.doesNotMatch(`${out.title} ${out.body}`, /server sentence/);
   }
+});
+
+test('the email beside a name is a plain email or nothing, and the rename body carries it only when given', () => {
+  for (const ok of ['', '  ', 'me@example.com', ' first.last+tag@sub.example.co ']) assert.equal(emailProblem(ok), '', ok);
+  for (const bad of ['me', 'me@example', '@example.com', 'me@.', 'a b@example.com', 'a@b@example.com', 'me@example.com\u0007', `${'a'.repeat(250)}@example.com`]) {
+    assert.equal(emailProblem(bad), 'That email does not look like name@example.com.', bad);
+  }
+  assert.deepEqual(requests.renameAccount('zai:usage', 'Work').body, { label: 'Work' });
+  assert.deepEqual(requests.renameAccount('zai:usage', 'Work', null).body, { label: 'Work', email: null });
+  assert.deepEqual(requests.renameAccount('zai:usage', 'Work', 'w@example.com').body, { label: 'Work', email: 'w@example.com' });
 });

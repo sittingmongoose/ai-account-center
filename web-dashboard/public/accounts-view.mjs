@@ -8,7 +8,7 @@ import { HOST_IDS, HOST_LABELS, hostIcon } from './computers.mjs';
 // and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
 // the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
 // reason it is off is said in plain words. Nothing here ever shows an example value as real data.
-import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, run, statusWord, duration, claudeSignInNeeded, updateTotal, isCatalogPending } from './view-model.mjs';
+import { PROVIDER_REGISTRY, accountName, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, run, statusWord, duration, claudeSignInNeeded, updateTotal, isCatalogPending } from './view-model.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { lazyFormat } from './time-format.mjs';
@@ -1206,12 +1206,18 @@ export function accountsViewModel(data, ctx = {}) {
       const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;
       const sampled = opening?.text || sampledLine;
       const sampledTip = opening?.text || sampledLineTip;
-      const email = text(account.email) || text(account.label) || 'Account identity unavailable';
-      const meta = [planLabel(text(account.plan), account.provider), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
+      // The name is the heading (`email`, kept as the row's heading key) and the email the line under it.
+      const shown = accountName(account);
+      const email = shown.heading;
+      const meta = planLabel(text(account.plan), account.provider);
       const line = c.lines?.[account.id];
       return {
-        id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
-        label: text(account.label),
+        id: account.id, provider: entry.id, email, subEmail: shown.email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
+        label: shown.named ? text(account.label) : '',
+        // Email beside the name only where the provider reports none: a registry account (OpenCode Go keys,
+        // API-key providers, Cursor). Claude, Codex and Antigravity report their own.
+        canEmail: !!reg && !text(account.email) && !['claude', 'codex', 'antigravity'].includes(entry.id),
+        ownerEmail: text(account.email) ? '' : text(account.ownerEmail),
         canRename: (entry.id === 'claude' && account.id === `claude:${text(account.capabilities?.claudeProfileId)}` && !!text(account.capabilities?.claudeProfileId)) || entry.id === 'codex' || !!reg || (entry.id === 'antigravity' && !!text(account.capabilities?.antigravityProfileId)),
         profile: homeRow?.profile || '',
         actions: rowActions(entry.id, account, homeRow, c),

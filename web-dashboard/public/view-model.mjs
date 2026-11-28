@@ -96,6 +96,24 @@ const CARD_PROVIDERS = ['cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 const validDate = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const text = (value) => (typeof value === 'string' ? value : '');
+/**
+ * An account's name and email as every surface shows them: the name the owner gave it is the
+ * heading and its email the smaller line under it. A label that only repeats the email or the
+ * provider's own name is no name; then the heading stays the email, else the label, as before.
+ * `ownerEmail` (typed by the owner where the provider reports none) shows only when the row has
+ * no provider email; it is display only and never an identity.
+ */
+export function accountName(account, fallback = 'Account identity unavailable') {
+  const email = text(account?.email) || text(account?.ownerEmail);
+  const label = text(account?.label);
+  const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+  const named = !!label && !same(label, email) && !same(label, text(account?.providerLabel));
+  return {
+    heading: (named ? label : '') || email || label || fallback,
+    email: named ? email : '',
+    named,
+  };
+}
 const nf2 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const nfCompact = new Intl.NumberFormat(undefined, {
   notation: 'compact',
@@ -720,7 +738,8 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
       id: account.id,
       provider: 'claude',
       profile: account.capabilities?.claudeProfileId || '',
-      email: text(account.email) || text(account.label) || 'Account identity unavailable',
+      email: accountName(account).heading,
+      subEmail: accountName(account).email,
       plan: text(account.plan),
       // While an Open runs, its progress replaces the meta line ("Copying history 3 of 18", "Opening on Mac").
       meta:
@@ -804,7 +823,8 @@ function codexSection(accounts, now) {
       id: account.id,
       provider: 'codex',
       profile: account.capabilities?.codexProfile || '',
-      email: text(account.email) || text(account.label) || 'Account identity unavailable',
+      email: accountName(account).heading,
+      subEmail: accountName(account).email,
       plan: text(account.plan),
       meta: [
         planLabel(text(account.plan)),
@@ -880,7 +900,8 @@ function antigravitySection(accounts, data, inventory, now) {
       id: account.id,
       provider: 'antigravity',
       profile: nativeRow?.profile || account.capabilities?.antigravityProfileId || '',
-      email: text(account.email) || text(account.label) || 'Account identity unavailable',
+      email: accountName(account).heading,
+      subEmail: accountName(account).email,
       plan: text(account.plan),
       meta: [
         text(account.plan),
@@ -961,7 +982,8 @@ function providerCards(accounts, hidden, now) {
         provider: account.provider,
         accountId: account.id,
         label,
-        identity: text(account.email) || text(account.label) || 'Identity unavailable',
+        identity: accountName(account, 'Identity unavailable').heading,
+        identitySub: accountName(account).email,
         plan,
         status: statusWord(account),
         source: [
@@ -1093,7 +1115,9 @@ export function detailsViewModel(data, id, ctx = {}) {
     account.capabilities?.codexProfile ||
     account.capabilities?.antigravityProfileId ||
     '';
+  const shownEmail = accountName(account).email;
   const facts = [
+    ...(shownEmail ? [{ label: 'Email', value: shownEmail, mono: false }] : []),
     ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
     ...antigravityServiceFacts(account),
@@ -1125,7 +1149,7 @@ export function detailsViewModel(data, id, ctx = {}) {
   return {
     id: account.id,
     provider: account.provider,
-    title: text(account.email) || text(account.label) || 'Account identity unavailable',
+    title: accountName(account).heading,
     sub: [
       provider?.label || text(account.providerLabel),
       planLabel(text(account.plan), account.provider),

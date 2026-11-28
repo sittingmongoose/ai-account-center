@@ -487,6 +487,7 @@ mod tests {
             platform: platform.to_owned(),
             ssh_host: ssh_host.map(str::to_owned),
             label: Some("Work key".to_owned()),
+            email: None,
             credential: Credential::AacKey {
                 key_id: "52f3251b".to_owned(),
             },
@@ -584,6 +585,7 @@ mod tests {
             platform: "ubuntu".to_owned(),
             ssh_host: None,
             label: None,
+            email: None,
             credential,
             created_at: None,
             created_by: None,

@@ -216,7 +216,10 @@ test('rows show the status only for an exception, the last sample and the source
   assert.equal(row(vm, 'codex:two').status, 'Stale');
   assert.equal(row(vm, 'codex:three').status, 'Sign-in needed');
   assert.equal(row(vm, 'codex:four').sampled, 'no reading yet');
-  assert.equal(row(vm, 'codex:one').meta, 'Pro · one');
+  // the name is the heading, the email the line under it, and the plan stays in the meta line
+  assert.equal(row(vm, 'codex:one').email, 'one');
+  assert.equal(row(vm, 'codex:one').subEmail, 'one@example.test');
+  assert.equal(row(vm, 'codex:one').meta, 'Pro');
   assert.equal(row(vm, 'codex:one').src, 'Codex CLI device login');
   assert.equal(row(vm, 'codex:one').srcSub, 'Ubuntu');
 });
@@ -2916,4 +2919,33 @@ test('a stored wallet session whose card shows no Wallet line can still be recon
   assert.deepEqual(row(plain, 'opencode-go:acct:9f2c41d0').actions.filter(a => a.act.includes('wallet') || a.act === 'paste-session').map(a => [a.act, a.label]), [
     ['paste-session', 'Paste wallet session'],
   ]);
+});
+
+test('a named row shows its name over its email; an email field is offered only where the provider reports none', () => {
+  const vm = accountsViewModel(
+    data([
+      account({ id: 'codex:one', label: 'Party' }),
+      account({ id: 'opencode-go:acct:0123abcd', provider: 'opencode-go', providerLabel: 'OpenCode Go', label: 'Account 2', email: null, ownerEmail: 'go@example.test', capabilities: {} }),
+      account({ id: 'opencode-go:acct:4567abcd', provider: 'opencode-go', providerLabel: 'OpenCode Go', label: 'Account 3', email: null, capabilities: {} }),
+      account({ id: 'muse:usage', provider: 'muse', providerLabel: 'Muse Code', label: 'Muse Code', email: 'm@example.test', ownerEmail: 'typed@example.test', capabilities: {} }),
+      account({ id: 'cursor:usage', provider: 'cursor', providerLabel: 'Cursor', label: 'Cursor', email: null, capabilities: {} }),
+    ], { providers: providers() }),
+    { now, registry: { accounts: [
+      { id: 'opencode-go:acct:0123abcd', provider: 'opencode-go', label: 'Account 2', email: null, credential: { kind: 'aac-key' }, actions: {}, removeRefusal: null },
+      { id: 'opencode-go:acct:4567abcd', provider: 'opencode-go', label: 'Account 3', email: null, credential: { kind: 'aac-key' }, actions: {}, removeRefusal: null },
+      { id: 'muse:usage', provider: 'muse', label: null, email: 'm@example.test', credential: { kind: 'discover' }, actions: {}, removeRefusal: null },
+      { id: 'cursor:usage', provider: 'cursor', label: null, email: null, credential: { kind: 'discover' }, actions: {}, removeRefusal: null },
+    ] } },
+  );
+  const pick = id => { const r = row(vm, id); return [r.email, r.subEmail, r.canEmail, r.ownerEmail]; };
+  // Codex reports its email: name over email, no email field
+  assert.deepEqual(pick('codex:one'), ['Party', 'one@example.test', false, '']);
+  // an OpenCode Go key with the owner's email: name over that email, the field seeded with it
+  assert.deepEqual(pick('opencode-go:acct:0123abcd'), ['Account 2', 'go@example.test', true, 'go@example.test']);
+  assert.deepEqual(pick('opencode-go:acct:4567abcd'), ['Account 3', '', true, '']);
+  // the provider's email always wins over a typed one, and then no field is offered
+  assert.deepEqual(pick('muse:usage'), ['m@example.test', '', false, '']);
+  // a label that is only the provider's name is no name: the heading stays as it was
+  assert.deepEqual(pick('cursor:usage'), ['Cursor', '', true, '']);
+  assert.equal(row(vm, 'codex:one').meta, 'Pro');
 });

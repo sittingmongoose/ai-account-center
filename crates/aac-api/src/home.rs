@@ -184,9 +184,12 @@ pub struct RowView {
     /// Profile id, or empty.
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
-    /// Email or label.
+    /// The heading: the account's name, else its email, else its label.
     #[serde(deserialize_with = "nullable")]
     pub email: String,
+    /// The email line under a named account's heading, or empty.
+    #[serde(deserialize_with = "nullable")]
+    pub sub_email: String,
     /// Reported plan.
     #[serde(deserialize_with = "nullable")]
     pub plan: String,
@@ -276,9 +279,12 @@ pub struct CardView {
     /// Provider name.
     #[serde(deserialize_with = "nullable")]
     pub label: String,
-    /// Email or label.
+    /// The heading: the account's name, else its email, else its label.
     #[serde(deserialize_with = "nullable")]
     pub identity: String,
+    /// The email line under a named account's heading, or empty.
+    #[serde(deserialize_with = "nullable")]
+    pub identity_sub: String,
     /// Plan without the provider's own name.
     #[serde(deserialize_with = "nullable")]
     pub plan: String,

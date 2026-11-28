@@ -31,7 +31,8 @@ pub(super) enum Flow {
         cli: PathBuf,
     },
     Muse {
-        source: Source,
+        // Boxed: the registry entry is far larger than the other variants.
+        source: Box<Source>,
         alias: String,
         home_id: Option<String>,
     },
@@ -355,7 +356,7 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
             start(
                 native,
                 Flow::Muse {
-                    source,
+                    source: Box::new(source),
                     alias,
                     home_id,
                 },

@@ -232,8 +232,11 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     // The inline rename: the pencil beside the name opens an input in the same place; Enter saves, Esc cancels.
     let editing = RwSignal::new(false);
     let draft = RwSignal::new(String::new());
+    // The Email field, only for a registry account whose provider reports no email (an OpenCode Go key, Z.ai...).
+    let draft_email = RwSignal::new(String::new());
     let rename_error = RwSignal::new(String::new());
     let can_rename = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.can_rename)));
+    let can_email = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.can_email)));
     let gone = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.gone)));
     let open_rename = Callback::new(move |e: web_sys::MouseEvent| {
         e.stop_propagation();
@@ -244,6 +247,7 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
         } else {
             r.label.clone()
         });
+        draft_email.set(r.owner_email.clone());
         rename_error.set(String::new());
         editing.set(true);
     });
@@ -257,12 +261,20 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
             rename_error.set("Keep it within 48 characters.".to_string());
             return;
         }
+        let mail = draft_email.get_untracked().trim().to_string();
+        let with_email = can_email.get_untracked();
+        if with_email && let Some(problem) = super::model::email_problem(&mail) {
+            rename_error.set(problem.to_string());
+            return;
+        }
         rename_error.set(String::new());
         editing.set(false);
-        page.send(
-            "account-rename",
-            &format!("{}\n{}", id.get_untracked(), trimmed),
-        );
+        let value = if with_email {
+            format!("{}\n{}\n{}", id.get_untracked(), trimmed, mail)
+        } else {
+            format!("{}\n{}", id.get_untracked(), trimmed)
+        };
+        page.send("account-rename", &value);
     });
     let cancel_rename = Callback::new(move |e: web_sys::MouseEvent| {
         e.stop_propagation();
@@ -280,25 +292,25 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                 on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { page.send("details", &id.get_untracked()); }>
                 <div class="acc-id" class:dim=move || row.with(|r| r.as_ref().is_some_and(|r| !r.shown_dash))>
                     <Show when=move || editing.get()>
-                        <span class="acc-rename" on:click=|e: web_sys::MouseEvent| e.stop_propagation()>
-                            <input class="acc-rename-input" type="text" placeholder="Name" autocomplete="off"
+                        <span class="acc-rename" class:two=move || can_email.get() on:click=|e: web_sys::MouseEvent| e.stop_propagation()>
+                            <input class="acc-rename-input acc-rename-name" type="text" placeholder="Name" autocomplete="off"
+                                aria-label="Name"
                                 autocapitalize="off" spellcheck="false" maxlength="48" autofocus
                                 data-probe=move || format!("rename-input:{}", id.get())
                                 disabled=move || page.busy.get()
                                 prop:value=move || draft.get()
                                 on:input=move |e| { draft.set(event_target_value(&e)); rename_error.set(String::new()); }
-                                on:keydown=move |e: web_sys::KeyboardEvent| {
-                                    // keys typed here belong to the field: Enter on the row opens Details
-                                    e.stop_propagation();
-                                    if e.key() == "Enter" {
-                                        e.prevent_default();
-                                        if !page.busy.get_untracked() { save_rename.run(()); }
-                                    } else if e.key() == "Escape" {
-                                        e.prevent_default();
-                                        rename_error.set(String::new());
-                                        editing.set(false);
-                                    }
-                                }/>
+                                on:keydown=move |e: web_sys::KeyboardEvent| field_keys(e, save_rename, rename_error, editing, page.busy)/>
+                            {move || can_email.get().then(|| view! {
+                                <input class="acc-rename-input acc-rename-email" type="email" inputmode="email"
+                                    placeholder="Email (optional)" aria-label="Email" autocomplete="off"
+                                    autocapitalize="off" spellcheck="false" maxlength="254"
+                                    data-probe=move || format!("rename-email:{}", id.get())
+                                    disabled=move || page.busy.get()
+                                    prop:value=move || draft_email.get()
+                                    on:input=move |e| { draft_email.set(event_target_value(&e)); rename_error.set(String::new()); }
+                                    on:keydown=move |e: web_sys::KeyboardEvent| field_keys(e, save_rename, rename_error, editing, page.busy)/>
+                            })}
                             <button type="button" class="btn sm" data-probe=move || format!("rename-save:{}", id.get())
                                 disabled=move || page.busy.get()
                                 on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); if !page.busy.get_untracked() { save_rename.run(()); } }>"Save"</button>
@@ -320,6 +332,9 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
                                 </button>
                             })}
                         </span>
+                        {move || { let e = get().sub_email; let tip = e.clone(); (!e.is_empty()).then(move || view! {
+                            <span class="acc-sub-email" title=tip>{e}</span>
+                        }) }}
                     </Show>
                 </div>
                 <div class="acc-info">
@@ -368,6 +383,28 @@ fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
             <RowLine line=line page=page/>
             <ReasonLine reason=reason/>
         </div>
+    }
+}
+
+/// Keys typed in the Name or Email field belong to it (Enter on the row would open Details): Enter saves, Escape
+/// cancels.
+fn field_keys(
+    e: web_sys::KeyboardEvent,
+    save: Callback<()>,
+    error: RwSignal<String>,
+    editing: RwSignal<bool>,
+    busy: Signal<bool>,
+) {
+    e.stop_propagation();
+    if e.key() == "Enter" {
+        e.prevent_default();
+        if !busy.get_untracked() {
+            save.run(());
+        }
+    } else if e.key() == "Escape" {
+        e.prevent_default();
+        error.set(String::new());
+        editing.set(false);
     }
 }
 

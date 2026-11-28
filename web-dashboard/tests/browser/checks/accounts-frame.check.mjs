@@ -492,7 +492,8 @@ export const tests = {
 			input: `${row('codex:two')} [data-probe="rename-input:codex:two"]`,
 			error: `${row('codex:two')} .acc-rename-err`,
 			refusal: `${row('codex:two')} .row-line.refuse`,
-			meta: `${row('codex:two')} .acc-meta`,
+			name: `${row('codex:two')} .acc-email`,
+			sub: `${row('codex:two')} .acc-sub-email`,
 		};
 		const pencil = async (why) => {
 			try {
@@ -540,7 +541,8 @@ export const tests = {
 		await t.until('the rename toast', () => [...document.querySelectorAll('.toast')].some((el) => /Renamed to Second account/.test(el.textContent)), null, { timeout: 10000 });
 		const patches = changes(server);
 		await t.equal('the refused name, then the new name, each sent once', JSON.stringify(patches.map((r) => [r.method, r.path, r.body.label])), JSON.stringify([['PATCH', '/api/accounts/codex%3Atwo', 'Busy name'], ['PATCH', '/api/accounts/codex%3Atwo', 'Second account']]));
-		await t.until('the field closes and the new name shows', (s) => !document.querySelector(s.input) && /Second account/.test(document.querySelector(s.meta)?.textContent || ''), sel, { timeout: 15000 });
+		await t.until('the field closes and the new name is the heading', (s) => !document.querySelector(s.input) && document.querySelector(s.name)?.textContent === 'Second account', sel, { timeout: 15000 });
+		await t.equal('the email is the line under the name', await t.page.$eval(sel.sub, (el) => el.textContent).catch(() => ''), 'codex.second@example.invalid');
 		await t.check('the refusal line is gone after the save', await t.page.evaluate((s) => !document.querySelector(s.refusal), sel));
 		await t.noConsoleErrors('only the injected rename refusal reached the console', {
 			allow: [/^Failed to load resource: the server responded with a status of 409 \(Conflict\) http:\/\/127\.0\.0\.1:\d+\/api\/accounts\/codex%3Atwo$/],
@@ -548,6 +550,77 @@ export const tests = {
 		await t.snap('accounts-rename-saved-402x874');
 		// nothing runs past either edge of the phone page while the field is open or after the save
 		await t.check('the phone page never scrolls sideways', await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), await t.page.evaluate(() => `${document.documentElement.scrollWidth} vs ${innerWidth}`));
+	},
+
+	async 'accounts: a name is the heading over its email, and a key without one takes an email beside its name'(t) {
+		// An OpenCode Go key: its provider reports no email, so the pencil opens Name and Email (name-heading brief).
+		const key = {
+			id: 'opencode-go:acct:0123abcd', provider: 'opencode-go', providerLabel: 'OpenCode Go', label: 'Account 2', email: null,
+			plan: 'go', platform: 'ubuntu', host: 'ubuntu', source: 'fixture', status: 'ok', message: null,
+			fetchedAt: new Date().toISOString(), sampledAt: new Date().toISOString(), isActive: false, hidden: false, trayHidden: false,
+			windows: [{ key: 'monthly', label: 'Monthly usage', usedPercent: 5, remainingPercent: 95, resetAt: new Date(Date.now() + 864e5 * 9).toISOString(), windowMinutes: 43200 }],
+			capabilities: {}, signInNeeded: [],
+		};
+		const server = fakeServer({ extra: [key] });
+		await open(t, server, { width: 402, height: 874, phone: true });
+		const id = key.id;
+		const sel = {
+			row: row(id),
+			pencil: `${row(id)} [data-probe="rename:${id}"]`,
+			name: `${row(id)} [data-probe="rename-input:${id}"]`,
+			email: `${row(id)} [data-probe="rename-email:${id}"]`,
+			error: `${row(id)} .acc-rename-err`,
+			heading: `${row(id)} .acc-email`,
+			sub: `${row(id)} .acc-sub-email`,
+		};
+		await t.until('the OpenCode Go key row is drawn', (s) => !!document.querySelector(s.pencil), sel, { timeout: 30000, hard: true });
+		await t.equal('with no email yet, its name is the heading and there is no email line', await t.page.evaluate((s) => [document.querySelector(s.heading)?.textContent, !!document.querySelector(s.sub)], sel), ['Account 2', false]);
+		await t.page.click(sel.pencil);
+		await t.page.waitForSelector(sel.email, { timeout: 5000 });
+		const fields = await t.page.evaluate((s) => [s.name, s.email].map((q) => {
+			const el = document.querySelector(q);
+			const r = el?.getBoundingClientRect();
+			return el ? { size: parseFloat(getComputedStyle(el).fontSize), top: Math.round(r.top), right: Math.round(r.right), type: el.type } : null;
+		}), sel);
+		await t.check('the Name and Email fields are 16px on a touch screen, so iOS never zooms', fields.every((f) => f && f.size >= 16), JSON.stringify(fields));
+		await t.check('the email field is a real email input under the name field', fields[1]?.type === 'email' && fields[1].top > fields[0].top, JSON.stringify(fields));
+		await t.check('both fields stay inside the phone width', fields.every((f) => f && f.right <= 402), JSON.stringify(fields));
+		await t.snap('name-heading-email-open-402x874');
+		// a bad email is refused where it is typed, sending nothing
+		await t.page.fill(sel.email, 'not-an-email');
+		await t.page.keyboard.press('Enter');
+		await t.until('the inline email refusal', (s) => document.querySelector(s.error)?.textContent === 'That email does not look like name@example.com.', sel, { timeout: 5000 });
+		await t.equal('no request was sent', changes(server).length, 0);
+		await t.check('Enter in the email field never opens the row\'s Details', await t.page.evaluate((s) => !document.querySelector('.details') && !document.querySelector(s.row)?.classList.contains('sel'), sel));
+		// Enter saves name and email together
+		await t.page.fill(sel.email, 'go.key@example.invalid');
+		await t.page.keyboard.press('Enter');
+		await t.until('the email toast', () => [...document.querySelectorAll('.toast')].some((el) => /Email saved for Account 2/.test(el.textContent)), null, { timeout: 10000 });
+		await t.equal('one PATCH with the name and the email', JSON.stringify(changes(server).map((r) => [r.method, r.path, r.body])), JSON.stringify([['PATCH', '/api/accounts/opencode-go%3Aacct%3A0123abcd', { label: 'Account 2', email: 'go.key@example.invalid' }]]));
+		await t.until('the email shows under the name', (s) => document.querySelector(s.sub)?.textContent === 'go.key@example.invalid', sel, { timeout: 15000 });
+		const lines = await t.page.evaluate((s) => [s.heading, s.sub].map((q) => {
+			const el = document.querySelector(q);
+			const lh = parseFloat(getComputedStyle(el).lineHeight) || 18;
+			return { text: el.textContent, oneLine: el.getBoundingClientRect().height < lh * 1.5, top: Math.round(el.getBoundingClientRect().top) };
+		}), sel);
+		await t.check('name and email each take one line, the email under the name', lines.every((l) => l.oneLine) && lines[1].top > lines[0].top, JSON.stringify(lines));
+		await t.page.evaluate((s) => document.querySelector(s.row)?.scrollIntoView({ block: 'center' }), sel);
+		await t.snap('name-heading-opencode-key-402x874');
+		// Claude reports its own email: its pencil opens the name alone, and the name becomes the heading over the email
+		const claudeRow = row('claude:one');
+		await t.page.click(`${claudeRow} [data-probe="rename:claude:one"]`);
+		await t.page.waitForSelector(`${claudeRow} [data-probe="rename-input:claude:one"]`, { timeout: 5000 });
+		await t.equal('a Claude row offers no email field', await t.page.$$eval(`${claudeRow} [data-probe^="rename-email:"]`, (els) => els.length), 0);
+		await t.page.fill(`${claudeRow} [data-probe="rename-input:claude:one"]`, 'Work Claude');
+		await t.page.keyboard.press('Enter');
+		await t.until('the renamed Claude row is headed by its name over its email', () => document.querySelector('.acc-item[data-row="claude:one"] .acc-email')?.textContent === 'Work Claude'
+			&& document.querySelector('.acc-item[data-row="claude:one"] .acc-sub-email')?.textContent === 'one.claude@example.invalid', null, { timeout: 15000 });
+		await t.equal('the Claude rename sent the name alone', JSON.stringify(changes(server).at(-1)?.body), JSON.stringify({ label: 'Work Claude' }));
+		await t.check('the phone page never scrolls sideways', await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+		await t.page.evaluate(() => document.querySelector('.acc-item[data-row="claude:one"]')?.scrollIntoView({ block: 'center' }));
+		await t.page.waitForTimeout(300);
+		await t.snap('name-heading-claude-renamed-402x874');
+		await t.noConsoleErrors('the page logged no errors');
 	},
 
 	async 'accounts: a refused control says why under its row and sends nothing'(t) {

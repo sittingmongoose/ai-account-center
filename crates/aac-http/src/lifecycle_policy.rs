@@ -61,6 +61,11 @@ pub(crate) enum Edit {
         id: String,
         label: Option<String>,
     },
+    /// The owner's display email; `None` removes it.
+    Email {
+        id: String,
+        email: Option<String>,
+    },
     Insert {
         entry: Value,
         unique_provider: bool,
@@ -202,6 +207,20 @@ pub(crate) fn edit_registry(mut registry: Value, edit: Edit) -> Option<Value> {
                 return Some(json!({"refusal":"missing"}));
             };
             entry.as_object_mut()?.insert("label".into(), json!(label));
+            None
+        }
+        Edit::Email { id, email } => {
+            let Some(entry) = accounts
+                .iter_mut()
+                .find(|entry| entry["id"].as_str() == Some(id.as_str()))
+            else {
+                return Some(json!({"refusal":"missing"}));
+            };
+            let entry = entry.as_object_mut()?;
+            match email {
+                Some(email) => entry.insert("email".into(), json!(email)),
+                None => entry.remove("email"),
+            };
             None
         }
         Edit::Insert {

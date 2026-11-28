@@ -442,6 +442,9 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
                 <ProviderMark provider=row.with_untracked(|r| r.provider.clone()) size=22/>
                 <div class="hid-t">
                     <b class="hemail">{move || breakable(&email.get())}</b>
+                    {move || row.with(|r| (!r.sub_email.is_empty()).then(|| view! {
+                        <span class="hsub" title=r.sub_email.clone()>{r.sub_email.clone()}</span>
+                    }))}
                     <span class="hmeta">{move || meta.get()}</span>
                     {move || row.with(|r| (!r.amounts_runs.is_empty()).then(|| view! {
                         <span class="hamts tnum">{runs_view(r.amounts_runs.clone())}</span>
@@ -629,7 +632,10 @@ fn ProviderCard(
                 <div class="hcard-who">
                     <div class="hcard-name"><b>{move || card.with(|c| c.label.clone())}</b>
                         {move || card.with(|c| (!c.plan.is_empty()).then(|| view! { <span>{c.plan.clone()}</span> }))}</div>
-                    <div class="hcard-id">{move || breakable(&card.with(|c| c.identity.clone()))}</div>
+                    <div class="hcard-id" class:named=move || card.with(|c| !c.identity_sub.is_empty())>{move || breakable(&card.with(|c| c.identity.clone()))}</div>
+                    {move || card.with(|c| (!c.identity_sub.is_empty()).then(|| view! {
+                        <div class="hcard-sub" title=c.identity_sub.clone()>{c.identity_sub.clone()}</div>
+                    }))}
                 </div>
             </header>
             <div class="hcard-meters">{meters}</div>

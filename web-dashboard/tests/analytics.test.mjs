@@ -309,3 +309,16 @@ test('malformed history identity fields cannot stringify objects or bypass the w
   assert.equal(JSON.parse(view.quotaCharts.find(row => row.key.includes('unknown-kind')).key).at(-1), '');
   assert.doesNotMatch(JSON.stringify(view.choices.metrics), /private|unsafe|unrecognized|not a label|not a unit|not a kind/);
 });
+
+test('analytics names each account by its name, with its email only where two accounts share a name', () => {
+  const accounts = [
+    account({ id: 'a', label: 'Work', email: 'a@example.test' }),
+    account({ id: 'b', label: 'Work', email: 'b@example.test' }),
+    account({ id: 'c', label: 'Home', email: 'c@example.test' }),
+  ];
+  const view = analyticsView(payload({ accounts }), {}, now);
+  const labels = Object.fromEntries(view.quotaHistory.flatMap((group) => group.rows).map((row) => [row.id, row.label]));
+  assert.deepEqual(labels, { a: 'Work · a@example.test', b: 'Work · b@example.test', c: 'Home' });
+  assert.ok(view.quotaCharts.some((chart) => /^Home · /.test(chart.title)));
+  assert.ok(view.quotaCharts.some((chart) => /^Work · a@example\.test · /.test(chart.title)));
+});

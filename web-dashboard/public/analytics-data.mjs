@@ -3,6 +3,7 @@ import { cursorPlanLabel } from './cursor-data.mjs';
 import { antigravityWindowLabel } from './antigravity-data.mjs';
 import { antigravitySeriesOrder, mainWindow } from './analytics-quota.mjs';
 import { lazyFormat } from './time-format.mjs';
+import { accountName } from './view-model.mjs';
 
 export { mainWindow };
 
@@ -45,9 +46,15 @@ function dateLabel(value, prefix = '') {
   if (!Number.isFinite(timestamp(value))) return '';
   return `${prefix}${dateFormat.format(new Date(value))}`;
 }
+/** An account's name heading, with its email when another account in `list` has the same name. */
+function who(account, list, fallback) {
+  const { heading, email } = accountName(account, fallback);
+  const twin = email && array(list).some(other => other && text(other.id) !== text(account.id) && accountName(other, fallback).heading === heading);
+  return twin ? `${heading} · ${email}` : heading;
+}
 function accountLabel(account) {
   const provider = text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider';
-  return `${provider} · ${text(account.email) || text(account.label) || 'Identity unavailable'} · ${text(account.platform) || 'Source unavailable'}`;
+  return `${provider} · ${accountName(account, 'Identity unavailable').heading} · ${text(account.platform) || 'Source unavailable'}`;
 }
 function options(payload, catalog) {
   const merged = new Map();
@@ -209,7 +216,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   const providerId = text(payload?.filters?.provider) || 'all';
   const accountId = text(payload?.filters?.account) || 'all';
   const providerOrder = new Map(ANALYTICS_PROVIDERS.map(([id], index) => [id, index]));
-  const accounts = array(payload?.accounts).filter(account => account && text(account.id) && ANALYTICS_PROVIDERS.some(row => row[0] === account.provider) && (providerId === 'all' || account.provider === providerId) && (accountId === 'all' || account.id === accountId)).map(account => ({ ...account, windows: historicalWindows(account, payload?.range) })).sort((a, b) => (providerOrder.get(a.provider) ?? 99) - (providerOrder.get(b.provider) ?? 99) || (text(a.email) || text(a.label)).localeCompare(text(b.email) || text(b.label)) || text(a.id).localeCompare(text(b.id)));
+  const accounts = array(payload?.accounts).filter(account => account && text(account.id) && ANALYTICS_PROVIDERS.some(row => row[0] === account.provider) && (providerId === 'all' || account.provider === providerId) && (accountId === 'all' || account.id === accountId)).map(account => ({ ...account, windows: historicalWindows(account, payload?.range) })).sort((a, b) => (providerOrder.get(a.provider) ?? 99) - (providerOrder.get(b.provider) ?? 99) || accountName(a, '').heading.localeCompare(accountName(b, '').heading) || (text(a.email) || text(a.ownerEmail)).localeCompare(text(b.email) || text(b.ownerEmail)) || text(a.id).localeCompare(text(b.id)));
   const choices = options(payload, catalog);
   // Changed labels, units and kinds are distinct reported historical series.
   // Qualify the selector with only validated scalar metadata; no account state selects a default.
@@ -217,7 +224,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   const percentMaximum = Math.max(100, ...histories.filter(row => row.plot.metricPercent).map(row => row.plot.axisMaximum));
   const allCharts = histories.map(({ account, window, key, plot: initial }) => {
     const plot = initial.metricPercent ? { ...initial, chartTop: `${axisNumber(percentMaximum)}%`, chartMiddle: `${axisNumber(percentMaximum / 2)}%`, points: initial.points.map(point => ({ ...point, percent: point.percent * initial.axisMaximum / percentMaximum })) } : initial;
-    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${account.provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
+    return { key, title: `${who(account, accounts, 'Account')} · ${account.provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
   });
   choices.metrics = [{ id: 'all', label: 'All histories' }, ...allCharts.map(row => {
     const [, key, , unit, kind] = JSON.parse(row.key);
@@ -245,7 +252,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
       if (outside) return { id, label, accounts: '—', availability: 'Outside filter', sample: 'Select to view this provider' };
       return { id, label, accounts: `${Number.isInteger(provider?.accountCount) ? provider.accountCount : accounts.filter(account => account.provider === id).length} accounts`, availability: `${Number.isInteger(provider?.availableAccounts) ? provider.availableAccounts : accounts.filter(account => account.provider === id && ['ok', 'cached'].includes(account.status)).length} available`, sample: dateLabel(provider?.latestSampleAt) || 'No observations' };
     }),
-    accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: account.provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
+    accounts: accounts.map(account => ({ id: text(account.id), label: who(account, accounts, 'Account identity unavailable'), provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: account.provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
     quotaCharts,
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
@@ -283,7 +290,7 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
       const current = window ? percentOf(window) : null;
       return {
         id: text(account.id), key: key || text(account.id), provider,
-        label: text(account.email) || text(account.label) || 'Account identity unavailable',
+        label: who(account, accounts, 'Account identity unavailable'),
         sub: [provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), text(account.platform)].filter(Boolean).join(' · '),
         windowLabel: window ? (provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage') : 'No quota reported',
         hasValue: current !== null, value: current ?? 0, valueText: current === null ? '' : number(current),

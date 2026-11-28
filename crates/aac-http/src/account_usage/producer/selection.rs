@@ -73,6 +73,8 @@ fn pinned_sources(
             let mut pinned = source.clone();
             pinned.id = format!("{}:{digest}", source.id);
             pinned.label = Some(format!("Key {digest}"));
+            // The discover entry's display email belongs to no single stored key.
+            pinned.email = None;
             (pinned, Some(identity))
         })
         .collect()
@@ -144,6 +146,7 @@ impl Producer {
                     let mut row = rows::additional(&source, &host, &name, None);
                     row["status"] = json!(status);
                     row["message"] = json!(message);
+                    rows::owner_email(&mut row, &source);
                     row
                 } else {
                     self.pinned_row(&source, pin.as_ref(), legacy, now, force)
@@ -239,8 +242,22 @@ impl Producer {
         out
     }
 
-    /// One source's row, its read pinned to one stored key's identity when it has one.
+    /// One source's row, its read pinned to one stored key's identity when it has one, with
+    /// the owner's display email when the provider reports none.
     pub(super) async fn pinned_row(
+        &self,
+        source: &Source,
+        pin: Option<&UsageIdentity>,
+        legacy: bool,
+        now: i64,
+        force: bool,
+    ) -> Value {
+        let mut row = self.read_row(source, pin, legacy, now, force).await;
+        rows::owner_email(&mut row, source);
+        row
+    }
+
+    async fn read_row(
         &self,
         source: &Source,
         pin: Option<&UsageIdentity>,
@@ -449,6 +466,7 @@ mod tests {
             platform: "ubuntu".to_owned(),
             ssh_host: None,
             label: Some("OpenCode Go".to_owned()),
+            email: None,
             credential,
             created_at: None,
             created_by: None,

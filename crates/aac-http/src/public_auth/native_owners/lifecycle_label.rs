@@ -53,17 +53,29 @@ pub(super) async fn handle(
         Ok(body) => body,
         Err(reply) => return reply,
     };
-    let label = match body.get("label").filter(|_| body.len() == 1) {
-        Some(Value::Null) => None,
-        Some(Value::String(label)) => match route_label(label) {
-            Ok(label) => Some(label),
-            Err(reply) => return reply,
-        },
-        _ => return lifecycle::invalid_action_body(),
+    let change = match route_change(&body) {
+        Ok(change) => change,
+        Err(reply) => return reply,
     };
     if !public_account_id(&json!(id)) {
         return error(400, "invalid_account", "That account id is not valid.");
     }
+    let provider_named = ["claude:", "codex:", "antigravity:profile:"]
+        .iter()
+        .any(|prefix| id.starts_with(prefix));
+    // Claude, Codex and Antigravity report the account's email themselves: only the name is
+    // the owner's there, and a body without a name changes nothing.
+    let label = match (&change, provider_named) {
+        (Change { email: Some(_), .. }, true) => {
+            return error(
+                400,
+                "email_from_provider",
+                "This account's email comes from its provider, so it cannot be edited here.",
+            );
+        }
+        (Change { label: None, .. }, true) => return lifecycle::invalid_action_body(),
+        (Change { label, .. }, _) => label.clone().flatten(),
+    };
 
     let root = native.agents.root().to_owned();
     if let Some(profile) = id.strip_prefix("claude:") {
@@ -158,7 +170,7 @@ pub(super) async fn handle(
     let native = native.clone();
     let id = id.to_owned();
     let saved = tokio::task::spawn_blocking(move || {
-        let source = commit(&root, &native.owners, &id, label)?;
+        let source = commit(&root, &native.owners, &id, &change)?;
         native.changed();
         account_view(&root, &source, secure).ok_or(SaveError::Write)
     })
@@ -189,6 +201,50 @@ fn route_label(label: &str) -> Result<String, Reply> {
     Ok(label.to_owned())
 }
 
+/// What one PATCH changes: `label` and/or `email`, each `None` when the body leaves it out
+/// and `Some(None)` when it clears it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Change {
+    label: Option<Option<String>>,
+    email: Option<Option<String>>,
+}
+
+fn route_change(body: &serde_json::Map<String, Value>) -> Result<Change, Reply> {
+    if body.is_empty() || body.keys().any(|key| key != "label" && key != "email") {
+        return Err(lifecycle::invalid_action_body());
+    }
+    let mut change = Change::default();
+    match body.get("label") {
+        None => {}
+        Some(Value::Null) => change.label = Some(None),
+        Some(Value::String(label)) => change.label = Some(Some(route_label(label)?)),
+        Some(_) => return Err(lifecycle::invalid_action_body()),
+    }
+    match body.get("email") {
+        None => {}
+        Some(Value::Null) => change.email = Some(None),
+        Some(Value::String(email)) => change.email = Some(route_email(email)?),
+        Some(_) => return Err(lifecycle::invalid_action_body()),
+    }
+    Ok(change)
+}
+
+/// The owner's display email, trimmed like the Accounts field; empty clears it.
+fn route_email(email: &str) -> Result<Option<String>, Reply> {
+    let email = email.trim_matches(crate::claude_account_store::is_js_space);
+    if email.is_empty() {
+        return Ok(None);
+    }
+    if !sources::valid_owner_email(email) {
+        return Err(error(
+            400,
+            "invalid_email",
+            "That email does not look like name@example.com.",
+        ));
+    }
+    Ok(Some(email.to_owned()))
+}
+
 fn unknown_account() -> Reply {
     error(404, "unknown_account", "That account was not found.")
 }
@@ -203,21 +259,28 @@ fn commit(
     root: &Path,
     owners: &Owners,
     id: &str,
-    label: Option<String>,
+    change: &Change,
 ) -> Result<sources::Source, SaveError> {
     let (writer, accounts) = claim_registry(root, owners)?;
-    let edited = edit_registry(
-        json!({"version":2,"accounts":accounts}),
-        Edit::Label {
+    let mut registry = json!({"version":2,"accounts":accounts});
+    let edits = [
+        change.label.clone().map(|label| Edit::Label {
             id: id.to_owned(),
             label,
-        },
-    )
-    .ok_or(SaveError::Write)?;
-    if edited["refusal"] == "missing" {
-        return Err(SaveError::Missing);
+        }),
+        change.email.clone().map(|email| Edit::Email {
+            id: id.to_owned(),
+            email,
+        }),
+    ];
+    for edit in edits.into_iter().flatten() {
+        let edited = edit_registry(registry, edit).ok_or(SaveError::Write)?;
+        if edited["refusal"] == "missing" {
+            return Err(SaveError::Missing);
+        }
+        registry = edited["registry"].clone();
     }
-    let mut bytes = serde_json::to_vec_pretty(&edited["registry"]).map_err(|_| SaveError::Write)?;
+    let mut bytes = serde_json::to_vec_pretty(&registry).map_err(|_| SaveError::Write)?;
     bytes.push(b'\n');
     let source = sources::parse_registry(&bytes)
         .map_err(|_| SaveError::Write)?
@@ -526,7 +589,16 @@ mod tests {
             })
             .collect();
         let owners = Owners::from_boot(rows, &files).unwrap();
-        let renamed = commit(&root, &owners, "zai:usage", Some("旅行".into())).unwrap();
+        let renamed = commit(
+            &root,
+            &owners,
+            "zai:usage",
+            &Change {
+                label: Some(Some("旅行".into())),
+                email: None,
+            },
+        )
+        .unwrap();
         assert_eq!(renamed.label.as_deref(), Some("旅行"));
         let sources::Sources::V2(accounts) = sources::read_registry(&root).unwrap() else {
             panic!("expected migrated registry");
@@ -548,16 +620,20 @@ mod tests {
             account.to_string(),
             r#"{"id":"zai:usage","provider":"zai","label":"旅行","email":null,"platform":"ubuntu","credential":{"kind":"discover"},"hidden":false,"trayHidden":false,"lifecycle":{"state":"ready","jobId":null},"actions":{"signInAgain":false,"replaceKey":false,"remove":true,"open":[],"recheck":true},"removeRefusal":null}"#
         );
+        let clear = Change {
+            label: Some(None),
+            email: None,
+        };
         let guard = owners.claim(rows, "account-registry", &root, None).unwrap();
         assert_eq!(
-            commit(&root, &owners, "zai:usage", None),
+            commit(&root, &owners, "zai:usage", &clear),
             Err(SaveError::Write)
         );
         drop(guard);
-        let renamed = commit(&root, &owners, "zai:usage", None).unwrap();
+        let renamed = commit(&root, &owners, "zai:usage", &clear).unwrap();
         assert_eq!(renamed.label, None);
         assert_eq!(
-            commit(&root, &owners, "zai:acct:00000001", None),
+            commit(&root, &owners, "zai:acct:00000001", &clear),
             Err(SaveError::Missing)
         );
     }
@@ -1002,5 +1078,177 @@ mod tests {
             (status, reply["code"].as_str()),
             (400, Some("invalid_body"))
         );
+    }
+
+    /// The owner's display email: stored beside the label for registry accounts only (a
+    /// provider that reports the email never takes one), checked for a plain email shape,
+    /// cleared by null or an empty field, and never touching the label or the account id.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_route_keeps_an_owner_email_for_registry_accounts_only() {
+        use crate::public_auth::{DashboardEvents, HubCache};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (native, _jobs) = NativeOwners::start(
+            root.clone(),
+            super::super::Groups {
+                writes: true,
+                lifecycle: true,
+                ..Default::default()
+            },
+            HubCache::default(),
+            DashboardEvents(tokio::sync::broadcast::channel(4).0),
+            Default::default(),
+            std::sync::Arc::new(crate::agent_transport::Agents::with_default(
+                root.clone(),
+                true,
+            )),
+        )
+        .unwrap();
+        let entry = |id: &str| {
+            let sources::Sources::V2(accounts) = sources::read_registry(&root).unwrap() else {
+                panic!("expected a v2 registry");
+            };
+            accounts.into_iter().find(|source| source.id == id).unwrap()
+        };
+        let stored = |id: &str| {
+            let bytes = std::fs::read(root.join("account-usage-accounts.json")).unwrap();
+            let registry: Value = serde_json::from_slice(&bytes).unwrap();
+            registry["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .cloned()
+                .unwrap()
+        };
+
+        // An email alone: saved (trimmed), the label and the id untouched.
+        let (status, _) = answer(&native, "zai:usage", r#"{"email":"  me@example.com "}"#).await;
+        assert_eq!(status, 200);
+        let zai = entry("zai:usage");
+        assert_eq!(
+            (zai.email.as_deref(), zai.label.as_deref()),
+            (Some("me@example.com"), None)
+        );
+        // A name alone keeps the email; both at once change both.
+        assert_eq!(
+            answer(&native, "zai:usage", r#"{"label":"Work Z"}"#)
+                .await
+                .0,
+            200
+        );
+        let zai = entry("zai:usage");
+        assert_eq!(
+            (zai.email.as_deref(), zai.label.as_deref()),
+            (Some("me@example.com"), Some("Work Z"))
+        );
+        assert_eq!(
+            answer(
+                &native,
+                "cursor:usage",
+                r#"{"label":"Team Cursor","email":"team@example.org"}"#
+            )
+            .await
+            .0,
+            200
+        );
+        let cursor = entry("cursor:usage");
+        assert_eq!(
+            (cursor.email.as_deref(), cursor.label.as_deref()),
+            (Some("team@example.org"), Some("Team Cursor"))
+        );
+        // A bad shape is refused in plain words and changes nothing.
+        for bad in [
+            "not-an-email",
+            "a@b",
+            "@example.com",
+            "two words@example.com",
+            "a@b@example.com",
+            "me@example.com\u{7}",
+        ] {
+            let body = json!({ "email": bad }).to_string();
+            let (status, reply) = answer(&native, "zai:usage", &body).await;
+            assert_eq!(
+                (status, reply["code"].as_str()),
+                (400, Some("invalid_email")),
+                "{bad}"
+            );
+        }
+        let too_long = json!({ "email": format!("{}@example.com", "a".repeat(250)) }).to_string();
+        assert_eq!(answer(&native, "zai:usage", &too_long).await.0, 400);
+        assert_eq!(entry("zai:usage").email.as_deref(), Some("me@example.com"));
+        // Clearing: an empty field and null both remove the key from the file.
+        assert_eq!(
+            answer(&native, "zai:usage", r#"{"email":"   "}"#).await.0,
+            200
+        );
+        assert!(stored("zai:usage").get("email").is_none());
+        assert_eq!(entry("zai:usage").label.as_deref(), Some("Work Z"));
+        assert_eq!(
+            answer(&native, "cursor:usage", r#"{"email":null}"#).await.0,
+            200
+        );
+        assert!(stored("cursor:usage").get("email").is_none());
+        assert_eq!(entry("cursor:usage").label.as_deref(), Some("Team Cursor"));
+        // Bodies with other keys or other types are refused.
+        for body in [
+            r#"{"email":5}"#,
+            r#"{"email":"a@b.co","name":"x"}"#,
+            r#"{}"#,
+        ] {
+            let (status, reply) = answer(&native, "zai:usage", body).await;
+            assert_eq!(
+                (status, reply["code"].as_str()),
+                (400, Some("invalid_body")),
+                "{body}"
+            );
+        }
+        // Claude, Codex and Antigravity report their own email: refused before any lookup.
+        for id in ["claude:work", "codex:two", "antigravity:profile:alpha"] {
+            for body in [
+                r#"{"email":"me@example.com"}"#,
+                r#"{"label":"X","email":null}"#,
+            ] {
+                let (status, reply) = answer(&native, id, body).await;
+                assert_eq!(
+                    (status, reply["code"].as_str()),
+                    (400, Some("email_from_provider")),
+                    "{id} {body}"
+                );
+            }
+        }
+        // Unknown registry ids, the session and the origin checks still refuse.
+        let (status, reply) = answer(&native, "zai:acct:0badf00d", r#"{"email":"a@b.co"}"#).await;
+        assert_eq!(
+            (status, reply["code"].as_str()),
+            (404, Some("unknown_account"))
+        );
+        let browser = DashboardPrincipal::Browser {
+            username: "fixture".into(),
+        };
+        let body = r#"{"email":"x@example.com"}"#;
+        let (status, _) = reply_json(
+            handle(
+                &native,
+                "zai:usage",
+                patch("zai:usage", body, browser, false),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, 403);
+        let (status, _) = reply_json(
+            handle(
+                &native,
+                "zai:usage",
+                patch("zai:usage", body, DashboardPrincipal::Anonymous, true),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, 401);
+        assert!(stored("zai:usage").get("email").is_none());
     }
 }

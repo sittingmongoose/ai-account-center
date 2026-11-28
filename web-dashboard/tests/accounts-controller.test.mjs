@@ -1191,3 +1191,34 @@ test('write-only paste session flow saves Qwen CN, handles OpenCode multi-worksp
   assert.match(muse.ctl.state.flows.muse.error.title, /CLI or API token/);
   assert.equal(JSON.stringify(muse.ctl.state).includes('bad-cli-token'), false);
 });
+
+test('a rename with the email field sends name and email together; empty clears it and a bad email sends nothing', async () => {
+  const id = 'opencode-go:acct:0123abcd';
+  const path = '/api/accounts/opencode-go%3Aacct%3A0123abcd';
+  const data = { schemaVersion: 1, accounts: [{ id, provider: 'opencode-go', label: 'Account 2', email: null, ownerEmail: 'old@example.test' }], settings: { hiddenProviders: [], hiddenAccountIds: [], visibilityAvailable: true }, providers: [] };
+  const registry = { accounts: [], jobs: [], trash: [] };
+  const routes = () => ({ [`PATCH ${path}`]: { account: { id } }, 'GET /api/accounts/registry': registry });
+  const both = harness({ routes: routes(), data });
+  await both.ctl.handle('account-rename', `${id}\nWork key\n  go@example.test `);
+  assert.deepEqual(both.sent[0], { method: 'PATCH', path, body: { label: 'Work key', email: 'go@example.test' } });
+  assert.equal(last(both.toasts).title, 'Renamed to Work key');
+  // only the email changed: the toast says so
+  const mail = harness({ routes: routes(), data });
+  await mail.ctl.handle('account-rename', `${id}\nAccount 2\nnew@example.test`);
+  assert.deepEqual(mail.sent[0].body, { label: 'Account 2', email: 'new@example.test' });
+  assert.equal(last(mail.toasts).title, 'Email saved for Account 2');
+  // an empty field clears it (null)
+  const clear = harness({ routes: routes(), data });
+  await clear.ctl.handle('account-rename', `${id}\nAccount 2\n   `);
+  assert.deepEqual(clear.sent[0].body, { label: 'Account 2', email: null });
+  assert.equal(last(clear.toasts).title, 'Email removed from Account 2');
+  // a bad email is refused where it was typed
+  const bad = harness({ routes: routes(), data });
+  await bad.ctl.handle('account-rename', `${id}\nAccount 2\nnot-an-email`);
+  assert.equal(bad.sent.length, 0);
+  assert.deepEqual(bad.ctl.state.lines, { [id]: { kind: 'rename', title: 'That email does not look like name@example.com.', body: '' } });
+  // without the field (two parts) the body stays the name alone
+  const plain = harness({ routes: routes(), data });
+  await plain.ctl.handle('account-rename', `${id}\nAccount 2`);
+  assert.deepEqual(plain.sent[0].body, { label: 'Account 2' });
+});
