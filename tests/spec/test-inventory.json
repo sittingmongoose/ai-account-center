@@ -2974,6 +2974,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "web-dashboard/leptos/src/accounts/actions.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "web-dashboard/leptos/src/accounts/flow.rs",
       "kind": "internal",
       "evidence": [],
