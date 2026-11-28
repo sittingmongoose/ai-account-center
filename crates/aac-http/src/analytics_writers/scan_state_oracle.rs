@@ -401,6 +401,8 @@ mod parity {
     }
 
     #[test]
+    // One push per kind keeps each table id on its own line for the provider drift guard.
+    #[allow(clippy::vec_init_then_push)]
     fn typed_scanner_state_applies_and_requests_as_the_json_oracle() {
         let mut kinds = Vec::new();
         kinds.push(scanner_kind("codex"));
