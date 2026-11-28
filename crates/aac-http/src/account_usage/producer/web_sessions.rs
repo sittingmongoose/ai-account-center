@@ -295,8 +295,9 @@ fn qwen_error_row(
 /// There is no standalone wallet row: the window rides inside the account's own
 /// card as a `balance` line. An account without a pasted console session gets no
 /// line (never an invented `$0`); a stale or failed read with a cached balance
-/// shows the cached window, and a session whose workspace cannot be matched to
-/// the account shows nothing and logs a plain reason.
+/// shows the cached window, a failed read with none shows an unavailable line
+/// (no number), and a session whose workspace cannot be matched to the account
+/// shows nothing and logs a plain reason.
 pub(super) async fn collect_wallet_window(
     root: &Path,
     state: &WebSessionState,
@@ -331,20 +332,25 @@ pub(super) async fn collect_wallet_window(
         tracing::warn!(account, reason);
         None
     };
-
-    if !force && now_ms < cached.cooldown_until_ms {
-        return cached
-            .last_good
-            .as_ref()
-            .and_then(|window| wallet_window(window.clone(), true));
-    }
-
-    let Some(transport) = build_transport(state) else {
-        return cached
+    // A failed read of a pasted session: the last balance, cached, else an
+    // unavailable line inside the card (never a guessed number).
+    let failed = |reason: &str| -> Option<Value> {
+        cached
             .last_good
             .as_ref()
             .and_then(|window| wallet_window(window.clone(), true))
-            .or_else(|| missing("OpenCode console wallet check has no HTTP client"));
+            .or_else(|| {
+                tracing::warn!(account, reason);
+                Some(unavailable_wallet_window())
+            })
+    };
+
+    if !force && now_ms < cached.cooldown_until_ms {
+        return failed("OpenCode console rate limited the wallet check");
+    }
+
+    let Some(transport) = build_transport(state) else {
+        return failed("OpenCode console wallet check has no HTTP client");
     };
 
     match opencode::collect(&transport, &cookies, Some(&workspace), now_ms).await {
@@ -369,13 +375,9 @@ pub(super) async fn collect_wallet_window(
             );
             wallet_window(stored_window, false)
         }
-        Err(OpenCodeError::NeedsSignIn) => cached
-            .last_good
-            .as_ref()
-            .and_then(|window| wallet_window(window.clone(), true))
-            .or_else(|| {
-                missing("The pasted OpenCode console session has expired; showing no wallet line")
-            }),
+        Err(OpenCodeError::NeedsSignIn) => {
+            failed("The pasted OpenCode console session has expired; paste a fresh one")
+        }
         Err(OpenCodeError::RateLimited {
             retry_after_seconds,
         }) => {
@@ -386,11 +388,7 @@ pub(super) async fn collect_wallet_window(
                 &fp,
                 now_ms.saturating_add((secs * 1000.0) as i64),
             );
-            cached
-                .last_good
-                .as_ref()
-                .and_then(|window| wallet_window(window.clone(), true))
-                .or_else(|| missing("OpenCode console rate limited the wallet check"))
+            failed("OpenCode console rate limited the wallet check")
         }
         Err(OpenCodeError::WorkspaceMismatch | OpenCodeError::ChooseWorkspace(_)) => missing(
             "The saved OpenCode workspace no longer matches this account; showing no wallet line",
@@ -402,12 +400,27 @@ pub(super) async fn collect_wallet_window(
             OpenCodeError::InvalidResponse
             | OpenCodeError::ProviderError
             | OpenCodeError::NetworkError,
-        ) => cached
-            .last_good
-            .as_ref()
-            .and_then(|window| wallet_window(window.clone(), true))
-            .or_else(|| missing("The OpenCode console wallet could not be read")),
+        ) => failed("The OpenCode console wallet could not be read"),
     }
+}
+
+/// The `Wallet` line of a card whose pasted session could not be read and has no
+/// cached balance: the reading contract's unavailable window, every number null.
+fn unavailable_wallet_window() -> Value {
+    json!({
+        "key": "zen-balance",
+        "label": "Wallet",
+        "kind": "balance",
+        "unit": "USD",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "resetAt": null,
+        "windowMinutes": null,
+        "used": null,
+        "limit": null,
+        "remaining": null,
+        "status": "unavailable",
+    })
 }
 
 /// One normalized `Wallet` balance window for an OpenCode Go account card.
@@ -929,6 +942,85 @@ mod tests {
         assert_eq!(stale["remaining"], 12.5);
         assert!(stale["sampledAt"].is_string());
 
+        server.abort();
+    }
+
+    /// An account with a pasted session whose read fails before any balance was
+    /// read keeps an honest Wallet line inside its card: unavailable, no number.
+    /// A workspace that no longer matches still shows nothing.
+    #[tokio::test]
+    async fn opencode_wallet_failed_read_without_cache_shows_an_unavailable_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut parsed = parse_pasted(
+            Surface::OpencodeWallet,
+            "auth=fixture-auth-fail",
+            &PasteOptions {
+                workspace_id: Some("wrk_fixture123".into()),
+                ..Default::default()
+            },
+            "2026-11-26T12:00:00Z",
+        )
+        .unwrap();
+        parsed.meta.workspace_id = Some("wrk_fixture123".into());
+        parsed.meta.account_id = Some("opencode-go:usage:cdae4b3e".to_owned());
+        save_as_agent(dir.path(), Surface::OpencodeWallet, &parsed).unwrap();
+        let source = Source {
+            id: "opencode-go:usage:cdae4b3e".to_owned(),
+            provider: "opencode-go".to_owned(),
+            platform: "ubuntu".to_owned(),
+            ssh_host: None,
+            label: None,
+            credential: Credential::Discover,
+            created_at: None,
+            created_by: None,
+        };
+
+        // 0: upstream 500. 1: session expired. 2: rate limited. 3: other workspace.
+        let mode = Arc::new(AtomicUsize::new(0));
+        let mode_clone = mode.clone();
+        let (endpoint, server) =
+            spawn_fixture(move |url, _| match mode_clone.load(Ordering::SeqCst) {
+                0 => (500, vec![], String::new()),
+                1 => (401, vec![], String::new()),
+                2 => (429, vec![("retry-after", "120")], String::new()),
+                _ if url.ends_with("/orgs") => (
+                    200,
+                    vec![("content-type", "application/json")],
+                    r#"[{"id":"wrk_zzzz999","name":"Other"}]"#.into(),
+                ),
+                _ => (200, vec![("content-type", "application/json")], "{}".into()),
+            })
+            .await;
+        let t0 = 1_795_608_000_000_i64;
+        for (m, label) in [(0, "provider error"), (1, "expired"), (2, "rate limited")] {
+            let state = WebSessionState::default();
+            state.set_endpoint(Some(endpoint.clone()));
+            mode.store(m, Ordering::SeqCst);
+            let window = collect_wallet_window(dir.path(), &state, &source, t0, true)
+                .await
+                .unwrap_or_else(|| panic!("{label}: the card keeps a Wallet line"));
+            assert_eq!(window["key"], "zen-balance", "{label}");
+            assert_eq!(window["label"], "Wallet", "{label}");
+            assert_eq!(window["kind"], "balance", "{label}");
+            assert_eq!(window["status"], "unavailable", "{label}");
+            assert!(
+                window["remaining"].is_null(),
+                "{label}: never an invented $0"
+            );
+            assert!(
+                crate::account_usage::contract::analytics_window(&window).is_some(),
+                "{label}: the window passes the reading contract"
+            );
+        }
+
+        let state = WebSessionState::default();
+        state.set_endpoint(Some(endpoint));
+        mode.store(3, Ordering::SeqCst);
+        assert!(
+            collect_wallet_window(dir.path(), &state, &source, t0, true)
+                .await
+                .is_none()
+        );
         server.abort();
     }
 

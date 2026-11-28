@@ -563,22 +563,8 @@ def collection_gates(agent, service):
         status, raw = s.ask(cache_route, request, method='PUT')
         assert status == 200 and json.loads(raw) == {'value': remote['sample']}
         assert s.ask(cache_route, dict(request, manifestHash='a'*64), method='PUT') == (200, '{"value":null}')
-        source = s.root / 'opencode-console-wallet-source.json'
-        configuration = {'version':1,'platform':'mac','sshHost':'fixture'}
-        source.write_text(json.dumps(configuration))
-        source.chmod(0o600)
-        binding = hashlib.sha256(json.dumps(configuration, separators=(',', ':')).encode()).hexdigest()
-        wallet = s.root / 'opencode-console-wallet-account.json'
-        account = 'plan-opencode-go-console-mac-123456abcdef'
-        write_wallet = '/internal/collection-cache/opencode-wallet-account/' + binding
-        pointer = {'version':1,'binding':binding,'accountId':account}
-        assert s.ask(write_wallet, dict(pointer, binding='e'*64), method='PUT') == (200, '{"saved":false}')
-        assert s.ask(write_wallet, pointer, method='PUT') == (200, '{"saved":true}')
-        assert json.loads(wallet.read_text()) == pointer and wallet.stat().st_mode & 0o777 == 0o600
-        status, raw = s.ask(cache_route, {'walletSource':True}, method='PUT')
-        assert status == 200 and json.loads(json.loads(raw)['value']) == json.loads(source.read_text())
-        status, raw = s.ask(cache_route, {'bindingHash':binding}, method='PUT')
-        assert status == 200 and json.loads(raw) == {'value':account}
+        # The console wallet pointer and wallet-source routes were retired with the standalone
+        # wallet row (2026-11-28): each OpenCode Go account reads its own pasted session.
 
     with Service(agent, service, collection=True, local_helper=True) as s:
         request = s.payload({'version':1,'provider':'claude','action':'collect','candidate':{},
