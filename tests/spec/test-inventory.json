@@ -2980,6 +2980,12 @@
       ]
     },
     {
+      "file": "web-dashboard/leptos/src/accounts/provider.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "web-dashboard/leptos/src/accounts/settings.rs",
       "kind": "internal",
       "evidence": [],
