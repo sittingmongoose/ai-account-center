@@ -226,14 +226,17 @@ pub(super) fn install(
     let rows = next["profiles"]
         .as_array_mut()
         .ok_or(ErrorCode::WriteFailed)?;
-    rows.retain(|row| row["id"].as_str() != Some(profile));
-    rows.push(json!({
-        "id":profile,"email":identity.email,"identityKey":key,"plan":identity.plan,
-        "credential":{"fingerprint":fingerprint,"format":FORMAT,
-            "identity":{"email":identity.email,"subject":identity.subject,"plan":identity.plan,
-                "verifiedAt":identity.verified_at,"source":identity.source},
-            "savedAt":started}
-    }));
+    runtime::replace_profile_row(
+        rows,
+        profile,
+        json!({
+            "id":profile,"email":identity.email,"identityKey":key,"plan":identity.plan,
+            "credential":{"fingerprint":fingerprint,"format":FORMAT,
+                "identity":{"email":identity.email,"subject":identity.subject,"plan":identity.plan,
+                    "verifiedAt":identity.verified_at,"source":identity.source},
+                "savedAt":started}
+        }),
+    );
     let save = || -> Result<bool, ErrorCode> {
         lease
             .writer()
@@ -393,6 +396,41 @@ pub(super) fn remove(native: &NativeOwners, name: &str, reviewed: &str) -> Resul
     Ok(())
 }
 
+/// Rename an Antigravity profile's display label. The profile id, its folders and its saved
+/// sign-in never change; clearing the label shows the email again.
+pub(super) fn rename(root: &Path, name: &str, label: Option<String>) -> Result<Value, RemoveError> {
+    let holder = lifecycle_maintenance::holder_record().ok_or(RemoveError::Failed)?;
+    AntigravityMaintenanceLease::initialize(root).map_err(|_| RemoveError::Failed)?;
+    // The claim is the activation's own transaction lock: one already held answers Busy.
+    let lease = AntigravityMaintenanceLease::claim(root, holder.as_bytes())
+        .map_err(|_| RemoveError::Busy)?;
+    let (mut document, state, _) = document(root, name)?;
+    let email = state
+        .profile(name)
+        .ok_or(RemoveError::Missing)?
+        .email
+        .clone();
+    let entry = document["profiles"]
+        .as_array_mut()
+        .and_then(|rows| rows.iter_mut().find(|row| row["id"].as_str() == Some(name)))
+        .and_then(Value::as_object_mut)
+        .ok_or(RemoveError::Missing)?;
+    match &label {
+        Some(text) => {
+            entry.insert("label".to_owned(), json!(text));
+        }
+        None => {
+            entry.remove("label");
+        }
+    }
+    publish(root, &lease, document).ok_or(RemoveError::Failed)?;
+    Ok(json!({
+        "id": format!("antigravity:profile:{name}"),
+        "provider": "antigravity",
+        "label": label.unwrap_or(email),
+    }))
+}
+
 fn publish(root: &Path, lease: &AntigravityMaintenanceLease, mut document: Value) -> Option<()> {
     let generation = document["revision"].as_i64()?.checked_add(1)?;
     document["revision"] = json!(generation);
@@ -547,6 +585,73 @@ mod tests {
         );
         assert!(parsed.profile("beta").is_none());
         assert!(parsed.profile("alpha").is_some());
+    }
+
+    #[test]
+    fn rename_changes_only_the_display_label_and_keeps_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        set_mode(&root, 0o700);
+        let credential = b"fixture-credential-a";
+        let fingerprint = runtime::sha256_hex(credential);
+        let identity = json!({
+            "email": "alpha@example.com",
+            "subject": "sub-alpha",
+            "plan": "Google AI Pro",
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "source": "provider-userinfo"
+        });
+        let key = LiveIdentity::from_value(&identity).unwrap().identity_key();
+        let registry = json!({
+            "version": 1, "revision": 1,
+            "profiles": [{
+                "id": "alpha", "email": "alpha@example.com", "identityKey": key, "plan": "Google AI Pro",
+                "credential": {"fingerprint": fingerprint, "format": FORMAT, "identity": identity,
+                    "savedAt": "2026-10-01T16:40:00.000Z"}
+            }],
+            "active": null, "transaction": null
+        });
+        write_private(
+            &root.join("antigravity-profiles/registry-000000000001.json"),
+            registry.to_string().as_bytes(),
+        );
+        let saved = root.join(format!(
+            "antigravity-instances/alpha/ubuntu/credential-{fingerprint}.bin"
+        ));
+        write_private(&saved, credential);
+
+        let account = rename(&root, "alpha", Some("Work Gemini".into())).unwrap();
+        assert_eq!(
+            account,
+            json!({"id":"antigravity:profile:alpha","provider":"antigravity","label":"Work Gemini"})
+        );
+        let (next, parsed, revision) = runtime::read_document(&root).unwrap();
+        assert_eq!(revision, 2);
+        assert_eq!(next["profiles"][0]["id"], "alpha");
+        assert_eq!(next["profiles"][0]["label"], "Work Gemini");
+        let record = parsed.profile("alpha").unwrap();
+        assert_eq!(record.label.as_deref(), Some("Work Gemini"));
+        assert_eq!(record.credential.fingerprint, fingerprint);
+        assert_eq!(fs::read(&saved).unwrap(), credential);
+
+        // Clearing the name shows the email again; an unknown profile is missing.
+        let account = rename(&root, "alpha", None).unwrap();
+        assert_eq!(account["label"], "alpha@example.com");
+        let (next, parsed, _) = runtime::read_document(&root).unwrap();
+        assert!(next["profiles"][0].get("label").is_none());
+        assert!(parsed.profile("alpha").unwrap().label.is_none());
+        assert!(matches!(
+            rename(&root, "ghost", Some("Nope".into())),
+            Err(RemoveError::Missing)
+        ));
+        // A running activation refuses the rename.
+        let lock = root.join("antigravity-profiles/.transaction-lock");
+        fs::create_dir(&lock).unwrap();
+        set_mode(&lock, 0o700);
+        assert!(matches!(
+            rename(&root, "alpha", Some("Later".into())),
+            Err(RemoveError::Busy)
+        ));
     }
 
     #[cfg(unix)]

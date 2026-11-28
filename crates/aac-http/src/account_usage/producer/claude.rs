@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 pub(super) fn manifest_profile(profile: &Value) -> Value {
     let mut result = Map::new();
-    for field in ["email", "id"] {
+    for field in ["email", "id", "label"] {
         if let Some(value) = profile.get(field) {
             result.insert(field.into(), value.clone());
         }

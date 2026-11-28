@@ -1323,25 +1323,28 @@ fn import_signin(
     let rows = next["profiles"]
         .as_array_mut()
         .ok_or(LifecycleErrorCode::WriteFailed)?;
-    rows.retain(|row| row["id"].as_str() != Some(profile_id));
-    rows.push(json!({
-        "id": profile_id,
-        "email": identity.email,
-        "identityKey": key,
-        "plan": identity.plan,
-        "credential": {
-            "fingerprint": fingerprint,
-            "format": CREDENTIAL_FORMAT,
-            "identity": {
-                "email": identity.email,
-                "subject": identity.subject,
-                "plan": identity.plan,
-                "verifiedAt": identity.verified_at,
-                "source": identity.source,
-            },
-            "savedAt": started,
-        }
-    }));
+    crate::antigravity_runtime::replace_profile_row(
+        rows,
+        profile_id,
+        json!({
+            "id": profile_id,
+            "email": identity.email,
+            "identityKey": key,
+            "plan": identity.plan,
+            "credential": {
+                "fingerprint": fingerprint,
+                "format": CREDENTIAL_FORMAT,
+                "identity": {
+                    "email": identity.email,
+                    "subject": identity.subject,
+                    "plan": identity.plan,
+                    "verifiedAt": identity.verified_at,
+                    "source": identity.source,
+                },
+                "savedAt": started,
+            }
+        }),
+    );
 
     let save = |lease: &AntigravityMaintenanceLease| -> Result<bool, LifecycleErrorCode> {
         lease

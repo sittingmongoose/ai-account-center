@@ -259,7 +259,11 @@ pub(super) fn claude(
     if id.is_some() && profile["windows"].is_object() {
         launchers.push("windows");
     }
-    let label = id.unwrap_or(&email);
+    let fallback = id.unwrap_or(&email);
+    let label = profile["label"]
+        .as_str()
+        .filter(|label| !label.is_empty())
+        .unwrap_or(fallback);
     let place = if desktop == Desktop::Mac {
         "Mac"
     } else {
@@ -376,6 +380,7 @@ pub(super) fn codex(
     candidate: Option<&Value>,
     sample: Option<&Value>,
     note: Option<&aac_renewal::notes::CodexRenewalNote>,
+    display: Option<&str>,
 ) -> Value {
     let candidate = candidate.unwrap_or(&Value::Null);
     let sample = sample.unwrap_or(&Value::Null);
@@ -388,7 +393,7 @@ pub(super) fn codex(
         "unavailable"
     };
     let mut row = json!({
-        "id":format!("codex:{name}"),"provider":"codex","providerLabel":"Codex","label":name,
+        "id":format!("codex:{name}"),"provider":"codex","providerLabel":"Codex","label":display.filter(|s| !s.is_empty()).unwrap_or(name),
         "email":email(&candidate["email"]),"plan":display_text(Some(&candidate["plan"]),80),
         "platform":"ubuntu","source":if sample["usageSource"] == "local" {"Codex local quota"} else {"Codex saved login on Ubuntu"},"status":status
     });

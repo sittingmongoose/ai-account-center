@@ -45,6 +45,8 @@ struct Profile {
     identity_verified: bool,
     available: bool,
     selected: bool,
+    /// The owner's display name for the profile (rename), applied to every row it shows.
+    label: Option<String>,
 }
 
 impl Profile {
@@ -58,7 +60,15 @@ impl Profile {
             identity_verified: row.get("identityVerified")?.as_bool()?,
             available: row.get("available")?.as_bool()?,
             selected: row.get("selected")?.as_bool()?,
+            label: None,
         })
+    }
+
+    /// The name a row shows: the owner's label, else the email (a cached row follows a rename at once).
+    fn shown(&self, row: &mut Value) {
+        if let Some(label) = &self.label {
+            row["label"] = json!(label);
+        }
     }
 
     fn revision_key(&self) -> String {
@@ -431,7 +441,7 @@ fn fallback(profile: &Profile, clock: i64) -> Value {
         "id": format!("antigravity:profile:{}", profile.id),
         "provider": "antigravity",
         "providerLabel": "Antigravity",
-        "label": email,
+        "label": profile.label.as_ref().map_or(email, |label| json!(label)),
         "email": (profile.public_row().map(|row| row["email"].clone())).unwrap_or(Value::Null),
         "plan": display_plan,
         "platform": "ubuntu",
@@ -697,10 +707,12 @@ impl QuotaService {
                     self.caches.remove(&profile.id);
                     let mut row = fallback(profile, read.now);
                     row["isActive"] = json!(profile.selected);
+                    profile.shown(&mut row);
                     return row;
                 }
                 let mut row = sampled.cloned().unwrap_or(Value::Null);
                 row["isActive"] = json!(profile.selected);
+                profile.shown(&mut row);
                 row
             })
             .collect()
@@ -727,6 +739,7 @@ impl QuotaService {
                     {
                         let mut row = result.clone();
                         row["isActive"] = json!(profile.selected);
+                        profile.shown(&mut row);
                         return row;
                     }
                     if cache.identity_key == profile.identity_key
@@ -735,6 +748,7 @@ impl QuotaService {
                     {
                         let mut row = carried;
                         row["isActive"] = json!(profile.selected);
+                        profile.shown(&mut row);
                         row["status"] = json!("cached");
                         row["cacheReason"] = json!("source_changed");
                         row["message"] =
@@ -767,9 +781,13 @@ impl QuotaService {
         let mut selected = 0;
         let mut profiles = Vec::new();
         for row in rows {
-            let Some(profile) = Profile::from_row(&row) else {
+            let Some(mut profile) = Profile::from_row(&row) else {
                 return Vec::new();
             };
+            profile.label = read
+                .state
+                .profile(&profile.id)
+                .and_then(|record| record.label.clone());
             if profile.id.len() > 64
                 || !ids.insert(profile.id.clone())
                 || (profile.identity_verified && !identities.insert(profile.identity_key.clone()))
@@ -800,6 +818,7 @@ impl QuotaService {
             self.caches.remove(&profile.id);
             let mut row = fallback(profile, now);
             row["isActive"] = json!(profile.selected);
+            profile.shown(&mut row);
             return row;
         }
         let revision = profile.revision_key();
@@ -845,6 +864,7 @@ impl QuotaService {
         };
         let mut row = result;
         row["isActive"] = json!(profile.selected);
+        profile.shown(&mut row);
         row
     }
 }
@@ -1016,6 +1036,49 @@ mod tests {
             out["reportedPlan"] = reported.clone();
         }
         out
+    }
+
+    #[test]
+    fn a_renamed_profile_shows_its_label_on_every_row_and_follows_a_rename_at_once() {
+        let cases: Value = serde_json::from_str(CASES).unwrap();
+        let (_temp, ccs) = materialize(&cases["registry"]);
+        let file = ccs
+            .join("antigravity-profiles")
+            .join("registry-000000000001.json");
+        let mut document: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        let first = document["profiles"][0]["id"].as_str().unwrap().to_owned();
+        let email = document["profiles"][0]["email"].clone();
+        let id = format!("antigravity:profile:{first}");
+        let mut service = QuotaService::default();
+        let mut cooldowns = Cooldowns::default();
+        let now = js_date("2026-10-01T17:00:00.000Z").unwrap();
+        let mut none = |_: &str| -> Option<Value> { None };
+        let mut shown = |state: &RegistryState, service: &mut QuotaService| {
+            let read = Read {
+                ccs: &ccs,
+                state,
+                live: None,
+                now,
+            };
+            let rows = service.get_accounts(&read, &mut none, &mut cooldowns, false);
+            rows.into_iter().find(|row| row["id"] == id).unwrap()
+        };
+        // No label (or one that is not a valid name): the email names the row, as before.
+        let row = shown(&read_state(&ccs).unwrap(), &mut service);
+        assert_eq!(row["label"], email);
+        document["profiles"][0]["label"] = json!("");
+        write(&file, document.to_string().as_bytes());
+        assert_eq!(
+            shown(&read_state(&ccs).unwrap(), &mut service)["label"],
+            email
+        );
+        // A rename shows at once, even while the profile's row is still cached.
+        document["profiles"][0]["label"] = json!("Work Gemini");
+        write(&file, document.to_string().as_bytes());
+        let row = shown(&read_state(&ccs).unwrap(), &mut service);
+        assert_eq!(row["label"], "Work Gemini");
+        assert_eq!(row["email"], email);
+        assert_eq!(row["capabilities"]["antigravityProfileId"], json!(first));
     }
 
     #[test]

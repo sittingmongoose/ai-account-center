@@ -433,9 +433,18 @@ fn promote(root: &Path, owners: &Owners, expected: &PendingProfile, email: &str)
     {
         return Err(());
     }
-    doc["profiles"].as_array_mut().ok_or(())?.push(json!({
+    let mut promoted = json!({
         "id":expected.id, "email":email, "mac":entry["mac"], "windows":entry["windows"],
-    }));
+    });
+    // The name given at creation (or a rename while pending) stays the profile's name.
+    if let Some(label) = expected
+        .label
+        .as_deref()
+        .filter(|label| sources::valid_label(label))
+    {
+        promoted["label"] = json!(label);
+    }
+    doc["profiles"].as_array_mut().ok_or(())?.push(promoted);
     let inventory_next = serde_json::to_vec(&doc).map_err(|_| ())?;
     let pending_next = serde_json::to_vec(&pending_doc).map_err(|_| ())?;
     inventory.write(&inventory_next).map_err(|_| ())?;
@@ -453,4 +462,70 @@ fn valid_claude_email(email: &str) -> bool {
         regex::Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").expect("valid email pattern")
     });
     email.encode_utf16().count() <= 254 && EMAIL.is_match(email)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn owners() -> Owners {
+        let rows = registry::rows().unwrap();
+        let files = rows
+            .iter()
+            .map(|row| {
+                let owner = if row.moves_with.as_deref() == Some("writes") {
+                    registry::Role::RustService
+                } else {
+                    row.owner
+                };
+                (row.id.clone(), owner.word().to_owned())
+            })
+            .collect();
+        Owners::from_boot(rows, &files).unwrap()
+    }
+
+    fn write_store(root: &Path, store: &str, document: &Value) {
+        let row = registry::row(store).unwrap();
+        let file = root.join(row.file(None).unwrap());
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+            #[cfg(unix)]
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(&file, serde_json::to_string(document).unwrap()).unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn a_signed_in_claude_profile_keeps_the_name_it_was_given() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let launcher = json!({"launcherName":"Claude Work","launcherPath":"/Applications/Claude Work.app","profilePath":"/x/Claude-work","sshHost":"mac-1"});
+        write_store(
+            &root,
+            "claude-pending",
+            &json!({"version":1,"profiles":[{
+                "id":"work","label":"Work Claude","mac":launcher,"windows":launcher,
+                "createdAt":"2026-11-20T00:00:00.000Z","expectedEmail":null
+            }]}),
+        );
+        let pending = manifest::read_pending_profiles(&root).unwrap();
+        promote(&root, &owners(), &pending[0], "a@example.test").unwrap();
+        let profiles = manifest::list_profiles(&root).unwrap();
+        let live: Value = serde_json::from_slice(
+            &std::fs::read(root.join("claude-desktop-profiles.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(live["profiles"][0]["id"], "work");
+        assert_eq!(live["profiles"][0]["email"], "a@example.test");
+        assert_eq!(live["profiles"][0]["label"], "Work Claude");
+        assert!(manifest::read_pending_profiles(&root).unwrap().is_empty());
+    }
 }

@@ -391,11 +391,11 @@ impl Producer {
         let requests = profiles.into_iter().map(|profile| {
             let candidate = candidate(&profile.name).cloned();
             let active = active.as_deref() == Some(&profile.name);
-            (profile.name, candidate, active)
+            (profile.name, profile.label, candidate, active)
         });
         let inventory = &inventory;
         stream::iter(requests)
-            .map(move |(name, candidate, active)| async move {
+            .map(move |(name, label, candidate, active)| async move {
                 let (sample, failure) = match &candidate {
                     Some(candidate) => {
                         self.read_primary_reply(platform, None, "codex", candidate, now)
@@ -436,6 +436,7 @@ impl Producer {
                     candidate.as_ref(),
                     sample.as_ref(),
                     note.as_ref(),
+                    label.as_deref(),
                 )
             })
             .buffered(3)
@@ -456,7 +457,14 @@ impl Producer {
         let Mode::Instance(pins) = mode else {
             return profiles
                 .iter()
-                .map(|p| codex_instances::unavailable_row(&p.name, Unavailable::Damaged, None))
+                .map(|p| {
+                    codex_instances::unavailable_row(
+                        &p.name,
+                        Unavailable::Damaged,
+                        None,
+                        p.label.as_deref(),
+                    )
+                })
                 .collect();
         };
         let platform = if cfg!(target_os = "macos") {
@@ -484,11 +492,19 @@ impl Producer {
         stream::iter(profiles)
             .map(move |profile| async move {
                 let name = profile.name;
+                let label = profile.label;
                 let Some(pin) = pins.get(&name) else {
-                    return codex_instances::unavailable_row(&name, Unavailable::Unpinned, None);
+                    return codex_instances::unavailable_row(
+                        &name,
+                        Unavailable::Unpinned,
+                        None,
+                        label.as_deref(),
+                    );
                 };
                 match codex_instances::own_login(inventory, pin) {
-                    Err(why) => codex_instances::unavailable_row(&name, why, Some(pin)),
+                    Err(why) => {
+                        codex_instances::unavailable_row(&name, why, Some(pin), label.as_deref())
+                    }
                     Ok(login) => {
                         let (sample, failure) = self
                             .read_primary_reply(platform, None, "codex", login, now)
@@ -499,6 +515,7 @@ impl Producer {
                             login,
                             sample.as_ref(),
                             failure.as_deref(),
+                            label.as_deref(),
                         )
                     }
                 }
@@ -809,6 +826,7 @@ fn read_refresh(root: &Path) -> u64 {
 struct SavedCodex {
     name: String,
     last_used: String,
+    label: Option<String>,
 }
 
 fn codex_names(root: &Path) -> Result<Vec<SavedCodex>, Decline> {
@@ -838,6 +856,10 @@ fn codex_names(root: &Path) -> Result<Vec<SavedCodex>, Decline> {
                         .as_str()
                         .unwrap_or_default()
                         .to_owned(),
+                    label: metadata["label"]
+                        .as_str()
+                        .filter(|label| !label.is_empty())
+                        .map(str::to_owned),
                 })
                 .collect())
         }
@@ -1014,6 +1036,7 @@ mod tests {
                 Some(&candidate),
                 Some(&sample),
                 note.as_ref(),
+                None,
             );
             assert_eq!(
                 aac_views::js_json::write(&row),

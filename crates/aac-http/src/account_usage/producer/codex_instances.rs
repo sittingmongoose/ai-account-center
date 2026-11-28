@@ -118,9 +118,14 @@ pub(super) fn active<'a>(
 const SOURCE: &str = "Codex T3 login on Ubuntu";
 
 /// The row of a profile that has no reading, with the pinned email when there is one.
-pub(super) fn unavailable_row(name: &str, why: Unavailable, pin: Option<&CodexPin>) -> Value {
+pub(super) fn unavailable_row(
+    name: &str,
+    why: Unavailable,
+    pin: Option<&CodexPin>,
+    display: Option<&str>,
+) -> Value {
     let shown = json!({"email": pin.map(|p| p.email.as_str()), "plan": null});
-    let mut row = rows::codex(name, false, false, Some(&shown), None, None);
+    let mut row = rows::codex(name, false, false, Some(&shown), None, None, display);
     row["source"] = json!(SOURCE);
     row["message"] = json!(why.message());
     row
@@ -133,10 +138,11 @@ pub(super) fn read_row(
     login: &Value,
     sample: Option<&Value>,
     failure: Option<&str>,
+    display: Option<&str>,
 ) -> Value {
     let refused = failure == Some("needs_sign_in")
         || sample.is_some_and(|reading| reading["status"] == "needs_sign_in");
-    let mut row = rows::codex(name, active, refused, Some(login), sample, None);
+    let mut row = rows::codex(name, active, refused, Some(login), sample, None, display);
     row["source"] = json!(SOURCE);
     if refused {
         row["message"] =
@@ -201,8 +207,14 @@ mod tests {
             Err(Unavailable::NoLogin),
             "a saved copy is never read"
         );
-        let row = unavailable_row("work", Unavailable::NoLogin, Some(&pin('a')));
+        let row = unavailable_row(
+            "work",
+            Unavailable::NoLogin,
+            Some(&pin('a')),
+            Some("My Work"),
+        );
         assert_eq!(row["status"], "unavailable");
+        assert_eq!(row["label"], "My Work");
         assert_eq!(row["windows"], json!([]));
         assert_eq!(row["email"], "work@example.test");
         assert_eq!(row["source"], SOURCE);
@@ -258,7 +270,7 @@ mod tests {
         assert_eq!(mode(Some(Err(failed))), Mode::Damaged);
         assert_eq!(mode(None), Mode::Damaged);
         assert_eq!(mode(Some(Ok(None))), Mode::Saved);
-        let row = unavailable_row("work", Unavailable::Unpinned, None);
+        let row = unavailable_row("work", Unavailable::Unpinned, None, None);
         assert_eq!(row["status"], "unavailable");
         assert!(row["email"].is_null());
     }
@@ -267,7 +279,8 @@ mod tests {
     #[test]
     fn a_rejected_instance_login_says_so() {
         let chosen = login(&["t3"], 'a', '1', "work@example.test");
-        let row = read_row("work", false, &chosen, None, Some("needs_sign_in"));
+        let row = read_row("work", false, &chosen, None, Some("needs_sign_in"), None);
+        assert_eq!(row["label"], "work");
         assert_eq!(row["status"], "needs_sign_in");
         assert!(
             row["message"]
@@ -278,7 +291,7 @@ mod tests {
         let sample = json!({"status":"ok","windows":[{"key":"five_hour","label":"5h","usedPercent":24.0,
             "remainingPercent":76.0,"resetAt":"2026-11-27T20:00:00.000Z","windowMinutes":300}],
             "fetchedAt":"2026-11-27T18:00:00.000Z","sampledAt":"2026-11-27T18:00:00.000Z"});
-        let row = read_row("work", true, &chosen, Some(&sample), None);
+        let row = read_row("work", true, &chosen, Some(&sample), None, None);
         assert_eq!(row["status"], "ok");
         assert_eq!(row["isActive"], true);
         assert_eq!(row["source"], SOURCE);

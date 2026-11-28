@@ -148,6 +148,8 @@ pub(crate) struct ProfileRecord {
     pub(crate) identity_key: String,
     pub(crate) plan: Option<String>,
     pub(crate) credential: CredentialRecord,
+    /// The display name the owner gave the profile (rename), when one is set; the id never changes.
+    pub(crate) label: Option<String>,
 }
 
 pub(crate) struct ActiveRecord {
@@ -316,6 +318,12 @@ pub(crate) fn validate_state(value: &Value) -> Option<(RegistryState, i64)> {
                 fingerprint: fingerprint.to_owned(),
                 identity,
             },
+            // A label that is not a valid account name is ignored, never a refusal of the registry.
+            label: row
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|label| crate::account_usage::sources::valid_label(label))
+                .map(str::to_owned),
         });
     }
     let active = match state.get("active") {
@@ -650,6 +658,22 @@ pub(crate) fn js_date(word: &str) -> Option<i64> {
     aac_views::js::parse_date(word).ok().flatten()
 }
 
+/// Put a freshly signed-in profile row in place of the saved one with the same id, keeping the
+/// owner's display name (rename) the old row carried; a new profile is simply added.
+pub(crate) fn replace_profile_row(rows: &mut Vec<Value>, id: &str, mut fresh: Value) {
+    let label = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(id))
+        .and_then(|row| row.get("label"))
+        .filter(|label| label.is_string())
+        .cloned();
+    rows.retain(|row| row["id"].as_str() != Some(id));
+    if let (Some(label), Some(entry)) = (label, fresh.as_object_mut()) {
+        entry.insert("label".to_owned(), label);
+    }
+    rows.push(fresh);
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -660,6 +684,47 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn a_new_sign_in_keeps_the_profiles_display_name() {
+        let mut rows = vec![
+            json!({"id":"work","email":"a@example.test","label":"Work Gemini"}),
+            json!({"id":"home","email":"b@example.test"}),
+        ];
+        replace_profile_row(
+            &mut rows,
+            "work",
+            json!({"id":"work","email":"a@example.test","plan":"Pro"}),
+        );
+        replace_profile_row(
+            &mut rows,
+            "home",
+            json!({"id":"home","email":"b@example.test"}),
+        );
+        replace_profile_row(
+            &mut rows,
+            "new",
+            json!({"id":"new","email":"c@example.test"}),
+        );
+        assert_eq!(rows.len(), 3);
+        let work = rows.iter().find(|row| row["id"] == "work").unwrap();
+        assert_eq!(work["label"], "Work Gemini");
+        assert_eq!(work["plan"], "Pro");
+        assert!(
+            rows.iter()
+                .find(|row| row["id"] == "home")
+                .unwrap()
+                .get("label")
+                .is_none()
+        );
+        assert!(
+            rows.iter()
+                .find(|row| row["id"] == "new")
+                .unwrap()
+                .get("label")
+                .is_none()
+        );
+    }
 
     const CASES: &str = include_str!("../../../tests/parity/g6/cases.json");
     const EXPECTED: &str = include_str!("../../../tests/parity/g6/expected.json");
