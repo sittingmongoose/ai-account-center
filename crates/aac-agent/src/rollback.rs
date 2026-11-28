@@ -503,10 +503,20 @@ fn places(data_root: Option<&str>) -> Result<Places, String> {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
         .ok_or("no home folder")?;
+    places_from(home, &environment_roots(), data_root)
+}
+
+/// The dashboard's root rules over the given home, `CCS_DIR`/`CCS_HOME` values and
+/// `--data-root` (see `aac_files::login_rollback::selected_ccs_root`).
+fn places_from(
+    home: PathBuf,
+    environment: &BTreeMap<String, String>,
+    data_root: Option<&str>,
+) -> Result<Places, String> {
     if !home.is_absolute() {
         return Err("the home folder must be absolute".into());
     }
-    let ccs = rollback::selected_ccs_root(&home, &environment_roots(), data_root)
+    let ccs = rollback::selected_ccs_root(&home, environment, data_root)
         .map_err(|failure| failure.detail.as_str().to_owned())?;
     if !ccs.is_absolute() {
         return Err("the AAC folder must be absolute".into());
@@ -521,30 +531,34 @@ fn parse_data_root(args: &[OsString]) -> Result<Option<String>, String> {
             .to_str()
             .filter(|root| !root.is_empty())
             .map(|root| Some(root.to_owned()))
-            .ok_or_else(|| "--data-root takes an ASCII path".into()),
+            .ok_or_else(|| "--data-root takes a non-empty UTF-8 path".into()),
         _ => Err("use --data-root <path> as the only argument".into()),
     }
 }
 
-fn shell_quote(text: &str) -> String {
-    if cfg!(windows) {
-        // cmd.exe quoting: wrap the whole argument. A double quote cannot occur in a Windows
-        // filename, so stripping one (should one appear through a Unix-style test path) is safe.
+/// One argument quoted for the shell the command is printed for: cmd.exe on Windows (the whole
+/// argument in double quotes; a Windows filename cannot hold one), POSIX sh elsewhere.
+fn shell_quote(text: &str, windows: bool) -> String {
+    if windows {
         format!("\"{}\"", text.replace('"', ""))
     } else {
         format!("'{}'", text.replace('\'', "'\\''"))
     }
 }
 
+fn restore_command_for(exe: &str, ccs: &Path, windows: bool) -> String {
+    format!(
+        "{} --logins-restore --data-root {}",
+        shell_quote(exe, windows),
+        shell_quote(&ccs.to_string_lossy(), windows)
+    )
+}
+
 fn restore_command(places: &Places) -> String {
     let exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "aac-agent".into());
-    format!(
-        "{} --logins-restore --data-root {}",
-        shell_quote(&exe),
-        shell_quote(&places.ccs.to_string_lossy())
-    )
+    restore_command_for(&exe, &places.ccs, cfg!(windows))
 }
 
 fn now_stamp() -> Result<String, String> {
@@ -1067,23 +1081,82 @@ mod tests {
 
     #[test]
     fn the_restore_command_carries_the_selected_root() {
+        // POSIX sh: single quotes, an embedded quote closed, escaped and reopened.
+        assert_eq!(
+            restore_command_for(
+                "/opt/aac/aac-agent",
+                Path::new("/data/aac root/it's"),
+                false
+            ),
+            "'/opt/aac/aac-agent' --logins-restore --data-root '/data/aac root/it'\\''s'"
+        );
+        // cmd.exe: each argument in double quotes, so spaces and & ^ ( ) stay literal.
+        assert_eq!(
+            restore_command_for(
+                r"C:\Program Files\AAC\aac-agent.exe",
+                Path::new(r"C:\aac alt & co"),
+                true
+            ),
+            r#""C:\Program Files\AAC\aac-agent.exe" --logins-restore --data-root "C:\aac alt & co""#
+        );
         let places = Places {
             home: PathBuf::from("/home/test"),
             ccs: PathBuf::from("/data/aac root"),
         };
-        let command = restore_command(&places);
         assert!(
-            command.contains("--logins-restore --data-root"),
-            "{command}"
+            restore_command(&places).ends_with(if cfg!(windows) {
+                " --logins-restore --data-root \"/data/aac root\""
+            } else {
+                " --logins-restore --data-root '/data/aac root'"
+            }),
+            "{}",
+            restore_command(&places)
         );
-        if cfg!(windows) {
-            assert!(command.contains("\"/data/aac root\""), "{command}");
-        } else {
-            assert!(
-                command.contains("--data-root '/data/aac root'"),
-                "{command}"
-            );
-        }
+    }
+
+    #[test]
+    fn the_agent_commands_select_the_dashboard_root() {
+        let home = PathBuf::from("/fixture/home");
+        let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        let ccs = |e: &BTreeMap<String, String>, root: Option<&str>| {
+            places_from(home.clone(), e, root).unwrap().ccs
+        };
+        assert_eq!(ccs(&env(&[]), None), home.join(".ccs"));
+        // CCS_DIR is the AAC folder itself.
+        assert_eq!(
+            ccs(&env(&[("CCS_DIR", "/fixture/aac-data")]), None),
+            PathBuf::from("/fixture/aac-data")
+        );
+        // Legacy CCS_HOME is a home: the AAC folder is its .ccs.
+        assert_eq!(
+            ccs(&env(&[("CCS_HOME", "/fixture/alternate-home")]), None),
+            PathBuf::from("/fixture/alternate-home/.ccs")
+        );
+        // CCS_DIR wins over CCS_HOME; empty values are skipped.
+        assert_eq!(
+            ccs(
+                &env(&[("CCS_DIR", "/fixture/aac-data"), ("CCS_HOME", "/x")]),
+                None
+            ),
+            PathBuf::from("/fixture/aac-data")
+        );
+        assert_eq!(
+            ccs(&env(&[("CCS_DIR", ""), ("CCS_HOME", "")]), None),
+            home.join(".ccs")
+        );
+        // --data-root (printed in the restore command) wins over both.
+        assert_eq!(
+            ccs(
+                &env(&[("CCS_DIR", "/fixture/aac-data")]),
+                Some("/fixture/printed")
+            ),
+            PathBuf::from("/fixture/printed")
+        );
     }
 
     #[test]
