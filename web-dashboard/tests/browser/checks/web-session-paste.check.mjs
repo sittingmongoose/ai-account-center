@@ -378,6 +378,15 @@ export const tests = {
 		await t.crop('opencode-go-card-with-wallet-phone-402', OC_CARD, 'phone 402: the OpenCode Go card carries the Wallet $18.25 balance under its 5-hour usage window');
 		const withText = await cardText();
 		await t.check('wallet balance line renders inside the OpenCode Go card', /Wallet/.test(withText) && withText.includes('18.25'), withText.slice(0, 160));
+		// Device pass r45: "Wallet" and "$18.25" share one line when they fit, the value level with the label's text.
+		const level = async () => t.page.evaluate((sel) => {
+			const amt = [...document.querySelectorAll(`${sel} .hamount`)].find((el) => /Wallet/.test(el.textContent));
+			const label = amt?.querySelector('dt span')?.getBoundingClientRect();
+			const value = amt?.querySelector('dd b')?.getBoundingClientRect();
+			return label && value ? { card: document.querySelector(sel).getBoundingClientRect().width, dy: Math.abs(label.bottom - value.bottom), sameLine: value.top < label.bottom } : null;
+		}, OC_CARD);
+		const walletLine = await level();
+		await t.check('Wallet and its amount sit on one line, level', !!walletLine && walletLine.sameLine && walletLine.dy <= 1.5, JSON.stringify(walletLine));
 		const noOverflow = await t.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 		await t.check('OpenCode Go card with a wallet causes no sideways overflow at 402', noOverflow, 'scrollWidth exceeded innerWidth');
 		await t.audit('opencode-go wallet card phone 402');
@@ -390,5 +399,7 @@ export const tests = {
 		await show(withWalletDashboard(WALLET_UNAVAILABLE), 'failed read');
 		const failText = await cardText();
 		await t.check('a failed read with nothing cached reads Wallet Unavailable, never $0', /Wallet/.test(failText) && /Unavailable/.test(failText) && !/\$?0\.00/.test(failText), failText.slice(0, 160));
+		const failLine = await level();
+		await t.check('Unavailable sits level with Wallet', !!failLine && failLine.sameLine && failLine.dy <= 1.5, JSON.stringify(failLine));
 	},
 };
