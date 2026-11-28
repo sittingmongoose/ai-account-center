@@ -305,6 +305,178 @@ fn quota_interval_ms(refresh_seconds: i64) -> i64 {
     configured.clamp(30_000, 3_600_000)
 }
 
+/// What every report of one pass reads besides its own sources and worker results.
+struct ReportFrame<'a> {
+    window_from_ms: i64,
+    now: i64,
+    local_complete: &'a HashSet<String>,
+    scanner_owned: &'a HashSet<String>,
+}
+
+/// One pass's reports, built a group of sources at a time as soon as the group's worker results
+/// are ready, then trimmed against the last accepted pass and typed. The pass holds these
+/// trimmed typed reports (what changed since the last accepted pass) instead of every
+/// computer's worker trees until its end.
+///
+/// The same reports as one `build_activity_reports_owned` call over every source: a report reads
+/// only its own source and the worker results of its tool and computer, and a group always
+/// holds every source of each tool and computer it builds (the caller's grouping guarantees it).
+#[derive(Default)]
+struct Shaped {
+    /// By the source's index in the pass's states, so they are ingested in that order.
+    reports: std::collections::BTreeMap<usize, (aac_store::contract::Report, report::Remember)>,
+    /// Every source whose report was built, refused or not.
+    built: HashSet<usize>,
+    /// A report the typed contract refused: the pass ingests nothing, as when the one
+    /// `contract_reports` call over every report failed.
+    refused: bool,
+}
+
+impl Shaped {
+    /// The reports of `states[indexes]`, reading `local` and `remote` (handed over).
+    fn build(
+        frame: &ReportFrame<'_>,
+        states: &[Value],
+        indexes: Vec<usize>,
+        local: HashMap<String, Vec<Value>>,
+        remote: Vec<Value>,
+    ) -> Vec<(usize, Value)> {
+        if indexes.is_empty() {
+            return Vec::new();
+        }
+        let sources: Vec<Value> = indexes.iter().map(|&index| states[index].clone()).collect();
+        let reports = report::build_activity_reports_owned(OwnedReportArgs {
+            local,
+            remote,
+            states: &sources,
+            window_from_ms: frame.window_from_ms,
+            now: frame.now,
+            local_complete: frame.local_complete,
+            scanner_owned: frame.scanner_owned,
+        });
+        indexes.into_iter().zip(reports).collect()
+    }
+
+    /// Trim and type built reports, one at a time: each full report is dropped once trimmed.
+    fn keep(&mut self, ingestor: &Ingestor, built: Vec<(usize, Value)>) {
+        for (index, built) in built {
+            self.built.insert(index);
+            let (trimmed, mut remember) = ingestor.trim(std::slice::from_ref(&built));
+            drop(built);
+            match report::contract_reports(&trimmed) {
+                Ok(mut typed) => {
+                    if let (Some(typed), Some(remember)) = (typed.pop(), remember.pop()) {
+                        self.reports.insert(index, (typed, remember));
+                    }
+                }
+                Err(_) => self.refused = true,
+            }
+        }
+    }
+
+    fn is_built(&self, index: usize) -> bool {
+        self.built.contains(&index)
+    }
+
+    /// One computer's sources of the scanner's tools other than Claude (`states[start..]`, the
+    /// computer's): each reads only its own source and this computer's worker results of its
+    /// tool, and every source of those tools on this computer is here. Claude's wait for the
+    /// mirror owners; sources of other tools may read the local results.
+    fn computer_sources(
+        states: &[Value],
+        start: usize,
+        scanner_owned: &HashSet<String>,
+    ) -> Vec<usize> {
+        (start..states.len())
+            .filter(|&index| {
+                states[index]["tool"]
+                    .as_str()
+                    .is_some_and(|tool| tool != "claude" && scanner_owned.contains(tool))
+            })
+            .collect()
+    }
+
+    /// Every Claude source of `host` not built yet: they read that computer's Claude worker.
+    fn claude_sources(&self, states: &[Value], host: &str) -> Vec<usize> {
+        (0..states.len())
+            .filter(|&index| {
+                !self.is_built(index)
+                    && states[index]["tool"] == "claude"
+                    && states[index]["host"].as_str() == Some(host)
+            })
+            .collect()
+    }
+
+    /// The sources not built yet: no worker result of the pass names them (failed reads,
+    /// Claude without a part), or they read the local results.
+    fn rest_sources(&self, states: &[Value]) -> Vec<usize> {
+        (0..states.len())
+            .filter(|&index| !self.is_built(index))
+            .collect()
+    }
+
+    /// The typed reports in source order with the digests to remember, or `None` when one
+    /// report was refused by the contract.
+    fn finish(self) -> Option<(Vec<aac_store::contract::Report>, Vec<report::Remember>)> {
+        if self.refused {
+            return None;
+        }
+        Some(self.reports.into_values().unzip())
+    }
+}
+
+/// The pass's Claude reports: the parts read back, the mirror owners chosen over all of them,
+/// then one computer's worker and reports at a time, the smallest first, each part dropped once
+/// its worker is built (the order changes nothing: each report reads only its own computer's).
+/// When the owners cannot be updated, every part's source is unreadable and no part is read.
+fn shape_claude(
+    engine: &aac_store::engine::Engine,
+    parked: Vec<claude_mirrors::Parked<'_>>,
+    states: &mut [Value],
+    pricing: &dyn Pricing,
+    frame: &ReportFrame<'_>,
+    shaped: &mut Shaped,
+    ingestor: &Ingestor,
+) {
+    let indexes: Vec<usize> = parked
+        .iter()
+        .map(claude_mirrors::Parked::state_index)
+        .collect();
+    let parts = parked
+        .into_iter()
+        .map(claude_mirrors::Parked::restore)
+        .collect::<aac_store::error::Result<Vec<_>>>()
+        .and_then(|mut parts| {
+            claude_contributions::prepare_live(engine, &mut parts, states, frame.now, pricing)?;
+            Ok(parts)
+        });
+    match parts {
+        Ok(mut parts) => {
+            parts.sort_by_key(|part| part.rows.len() + part.sessions.len());
+            // Every Claude source of a computer reads its part (computers are distinct, so
+            // each has one part).
+            for part in parts {
+                let group = shaped.claude_sources(states, part.host);
+                let worker = part.worker(frame.now, pricing);
+                let remote = vec![json!({ "tool": "claude", "host": part.host, "data": worker })];
+                drop(part);
+                let built = Shaped::build(frame, states, group, HashMap::new(), remote);
+                shaped.keep(ingestor, built);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.code,
+                "Claude mirror owners could not be updated"
+            );
+            for index in indexes {
+                states[index]["state"] = json!("unreadable");
+                states[index]["cause"] = json!("store_unavailable");
+            }
+        }
+    }
+}
+
 /// A pass's start: the scheduler's clock reading and the monotonic instant it was taken.
 struct PassClock {
     started_ms: i64,
@@ -684,13 +856,23 @@ async fn activity_pass(
         });
     }
     let pricing = ResolverPricing::new(ccs_dir);
-    let mut remote: Vec<Value> = Vec::new();
     let mut claude = Vec::new();
     let mut states: Vec<Value> = Vec::new();
     let preferences = crate::account_reads::preferences(ccs_dir);
     let kinds = aac_providers::scanner_kinds()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let scanner_owned: HashSet<String> = kinds.iter().cloned().collect();
+    // Only the jsonl read finishes locally; it is known once the computers are read, so the
+    // frame of the reports built before then never names it (they never read `local`).
+    let no_local: HashSet<String> = HashSet::new();
+    let frame = ReportFrame {
+        window_from_ms: cutoff,
+        now,
+        local_complete: &no_local,
+        scanner_owned: &scanner_owned,
+    };
+    let mut shaped = Shaped::default();
     // Saved Generic JSONL sources have no scanner kind: this writer reads them itself.
     let mut mapped: Vec<Value> = Vec::new();
     let mut mapped_state = false;
@@ -744,7 +926,8 @@ async fn activity_pass(
         let mut scanned = false;
         let mut claude_state = None;
         let start_state = states.len();
-        let start_remote = remote.len();
+        // This computer's worker results: shaped into its reports once its checkpoint is saved.
+        let mut remote: Vec<Value> = Vec::new();
         for batch in &requests.batches {
             let batch = batch.clone();
             let Some(scan_state::ScanArgs { text, packed }) =
@@ -771,7 +954,7 @@ async fn activity_pass(
                     );
                     // Nothing of this computer's pass is kept or saved.
                     states.truncate(start_state);
-                    remote.truncate(start_remote);
+                    drop(remote);
                     states.extend(requests.batches.iter().flatten().map(|kind| {
                         json!({
                             "tool": kind, "host": host, "state": "unreadable",
@@ -857,38 +1040,42 @@ async fn activity_pass(
         }
         if let Some(state_index) = claude_state {
             let (rows, sessions, identities) = cache.take_kind("claude");
-            claude.push(claude_mirrors::Part {
-                host,
-                state_index,
-                rows,
-                sessions,
-                identities,
-            });
+            // Set aside, compressed, while the other computers are read.
+            claude.push(
+                claude_mirrors::Part {
+                    host,
+                    state_index,
+                    rows,
+                    sessions,
+                    identities,
+                }
+                .park(),
+            );
         }
+        drop(cache);
+        // This computer's reports of the scanner's tools other than Claude, built now and held
+        // trimmed and typed: its worker trees are gone before the next computer is read.
+        let early = Shaped::computer_sources(&states, start_state, &scanner_owned);
+        let built = Shaped::build(&frame, &states, early, HashMap::new(), remote);
+        shaped.keep(
+            &state.lock().unwrap_or_else(|p| p.into_inner()).ingestor,
+            built,
+        );
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
     let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
     if generation != guard.generation {
         return;
     }
-    match claude_contributions::prepare_live(engine, &mut claude, &mut states, now, &pricing) {
-        Ok(()) => {
-            for part in claude {
-                let worker = part.worker(now, &pricing);
-                remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                code = error.code,
-                "Claude mirror owners could not be updated"
-            );
-            for part in claude {
-                states[part.state_index]["state"] = json!("unreadable");
-                states[part.state_index]["cause"] = json!("store_unavailable");
-            }
-        }
-    }
+    shape_claude(
+        engine,
+        claude,
+        &mut states,
+        &pricing,
+        &frame,
+        &mut shaped,
+        &guard.ingestor,
+    );
     let mut local: HashMap<String, Vec<Value>> = HashMap::new();
     let mut local_complete: HashSet<String> = HashSet::new();
     if mapped_state {
@@ -897,23 +1084,14 @@ async fn activity_pass(
             local_complete.insert("jsonl".into());
         }
     }
-    let scanner_owned: HashSet<String> = kinds.into_iter().collect();
-    // The worker results are handed over: the reports take their cells and sessions instead of
-    // copying them, and each copy is dropped as soon as the next one is made.
-    let reports = report::build_activity_reports_owned(OwnedReportArgs {
-        local,
-        remote,
-        states: &states,
-        window_from_ms: cutoff,
-        now,
+    let rest = shaped.rest_sources(&states);
+    let frame = ReportFrame {
         local_complete: &local_complete,
-        scanner_owned: &scanner_owned,
-    });
-    let (trimmed, remember) = guard.ingestor.trim(&reports);
-    drop(reports);
-    let typed = report::contract_reports(&trimmed);
-    drop(trimmed);
-    if let Ok(typed) = typed
+        ..frame
+    };
+    let built = Shaped::build(&frame, &states, rest, local, Vec::new());
+    shaped.keep(&guard.ingestor, built);
+    if let Some((typed, remember)) = shaped.finish()
         && !typed.is_empty()
     {
         match activity::ingest(engine, &typed) {
@@ -2649,5 +2827,353 @@ mod tests {
             before + 1,
             "due activity_pass must reclaim allocator pages when the pass ends"
         );
+    }
+}
+
+#[cfg(test)]
+mod shaped_tests {
+    use super::*;
+
+    const NOW: i64 = 1_795_212_000_000;
+    const HOUR_MS: i64 = 3_600_000;
+
+    fn session_id(seed: usize) -> String {
+        format!("{:016x}", 0x5eed_0000_u64 + seed as u64)
+    }
+
+    /// One tool's worker result on `host`: `files` files, each a session with hour rows over the
+    /// last three days; `bump` raises one file's tokens (a later pass that changed one day).
+    fn worker(tool: &str, host: &str, files: usize, bump: u64, dir: &Path) -> Value {
+        let mut rows = Vec::new();
+        let mut srows = Vec::new();
+        for file in 0..files {
+            let key = format!("{tool}:/fixture/{host}/{file}.jsonl");
+            for hour in 0..3 {
+                let at = NOW - (file as i64 % 3) * DAY - hour * HOUR_MS - HOUR_MS;
+                let iso = aac_num::ecma::to_iso_string(at).expect("hour");
+                let extra = if file == 0 { bump } else { 0 };
+                rows.push(
+                    json!({"k": tool, "f": key, "m": format!("model-{}", file % 3),
+                    "h": format!("{} {}:00", &iso[..10], &iso[11..13]),
+                    "i": 100 + file as u64 + extra, "o": 20, "cr": 500, "cw": 30, "n": 2}),
+                );
+            }
+            srows.push(json!({"k": tool, "f": key, "s": session_id(file),
+                "m": format!("model-{}", file % 3), "a": NOW - 3 * DAY, "z": NOW - HOUR_MS,
+                "i": 300 + file as u64 + bump, "o": 60, "cr": 1500, "cw": 90, "n": 6}));
+        }
+        collect::worker_from_scan(&rows, &srows, tool, host, NOW, &ResolverPricing::new(dir))
+    }
+
+    fn source(tool: &str, host: &str, state: &str) -> Value {
+        json!({"tool": tool, "host": host, "state": state, "lastScanAt": iso(NOW - 60_000),
+            "counts": {"freshness": {"state": "current", "newestDataMs": NOW - 60_000,
+                "newestActivityMs": NOW - 60_000, "activityComplete": true}}})
+    }
+
+    fn iso(at: i64) -> String {
+        aac_num::ecma::to_iso_string(at).expect("iso")
+    }
+
+    /// A pass's sources, computer by computer (as the pass pushes them), with the worker
+    /// results each computer's scans returned, the Claude workers, and the local results.
+    struct Pass {
+        states: Vec<Value>,
+        computers: Vec<(usize, Vec<Value>)>,
+        claude: Vec<(&'static str, Value)>,
+        local: HashMap<String, Vec<Value>>,
+        local_complete: HashSet<String>,
+    }
+
+    fn pass(bump: u64, dir: &Path) -> Pass {
+        let entry = |tool: &str, host: &str, files| json!({"tool": tool, "host": host, "data": worker(tool, host, files, bump, dir)});
+        let mut states = Vec::new();
+        let mut computers = Vec::new();
+        // ubuntu: Claude with a part, codex read twice (an earlier source copies, the last takes),
+        // omp read, a failed muse batch, and the Generic JSONL read in place.
+        states.extend([
+            source("claude", "ubuntu", "ok"),
+            source("codex", "ubuntu", "ok"),
+            source("codex", "ubuntu", "ok"),
+            source("omp", "ubuntu", "ok"),
+            json!({"tool": "muse", "host": "ubuntu", "state": "scan_failed",
+                "detail": "scan-usage unavailable"}),
+            source("jsonl", "ubuntu", "ok"),
+        ]);
+        computers.push((
+            0,
+            vec![entry("codex", "ubuntu", 12), entry("omp", "ubuntu", 5)],
+        ));
+        // nas1: Claude failed (no part), codex read.
+        let start = states.len();
+        states.extend([
+            json!({"tool": "claude", "host": "nas1", "state": "unreadable",
+                "cause": "agent_missing"}),
+            source("codex", "nas1", "ok"),
+        ]);
+        computers.push((start, vec![entry("codex", "nas1", 7)]));
+        // mac: Claude with a part, a scanner-only tool read, and a store that failed back.
+        let start = states.len();
+        states.extend([
+            source("claude", "mac", "ok"),
+            source("cursor", "mac", "ok"),
+            json!({"tool": "omp", "host": "mac", "state": "unreadable",
+                "cause": "store_unavailable"}),
+        ]);
+        computers.push((start, vec![entry("cursor", "mac", 4)]));
+        let claude = vec![
+            ("ubuntu", worker("claude", "ubuntu", 20, bump, dir)),
+            ("mac", worker("claude", "mac", 9, bump, dir)),
+        ];
+        let local = HashMap::from([(
+            "jsonl".to_string(),
+            vec![worker("jsonl", "ubuntu", 3, bump, dir)],
+        )]);
+        Pass {
+            states,
+            computers,
+            claude,
+            local,
+            local_complete: HashSet::from(["jsonl".to_string()]),
+        }
+    }
+
+    fn scanner_owned() -> HashSet<String> {
+        aac_providers::scanner_kinds().map(str::to_owned).collect()
+    }
+
+    /// Before: every worker result held, one report call, one trim, one typed contract.
+    fn all_at_once(pass: Pass, ingestor: &Ingestor) -> (Vec<u8>, Vec<report::Remember>) {
+        let mut remote: Vec<Value> = pass.computers.into_iter().flat_map(|(_, r)| r).collect();
+        for (host, worker) in pass.claude {
+            remote.push(json!({"tool": "claude", "host": host, "data": worker}));
+        }
+        let reports = report::build_activity_reports_owned(OwnedReportArgs {
+            local: pass.local,
+            remote,
+            states: &pass.states,
+            window_from_ms: NOW - 31 * DAY,
+            now: NOW,
+            local_complete: &pass.local_complete,
+            scanner_owned: &scanner_owned(),
+        });
+        let (trimmed, remember) = ingestor.trim(&reports);
+        let typed = report::contract_reports(&trimmed).expect("contract");
+        (serde_json::to_vec(&typed).expect("typed"), remember)
+    }
+
+    /// After: each computer's reports as it is read, Claude one computer at a time, the rest.
+    fn shaped(pass: Pass, ingestor: &Ingestor) -> (Vec<u8>, Vec<report::Remember>) {
+        let owned = scanner_owned();
+        let none = HashSet::new();
+        let frame = ReportFrame {
+            window_from_ms: NOW - 31 * DAY,
+            now: NOW,
+            local_complete: &none,
+            scanner_owned: &owned,
+        };
+        let mut shaped = Shaped::default();
+        for (start, remote) in pass.computers {
+            let group = Shaped::computer_sources(&pass.states, start, &owned);
+            let built = Shaped::build(&frame, &pass.states, group, HashMap::new(), remote);
+            shaped.keep(ingestor, built);
+        }
+        for (host, worker) in pass.claude {
+            let group = shaped.claude_sources(&pass.states, host);
+            let remote = vec![json!({"tool": "claude", "host": host, "data": worker})];
+            let built = Shaped::build(&frame, &pass.states, group, HashMap::new(), remote);
+            shaped.keep(ingestor, built);
+        }
+        let frame = ReportFrame {
+            local_complete: &pass.local_complete,
+            ..frame
+        };
+        let rest = shaped.rest_sources(&pass.states);
+        let built = Shaped::build(&frame, &pass.states, rest, pass.local, Vec::new());
+        shaped.keep(ingestor, built);
+        let (typed, remember) = shaped.finish().expect("contract");
+        (serde_json::to_vec(&typed).expect("typed"), remember)
+    }
+
+    #[test]
+    fn reports_shaped_per_computer_match_one_call_over_the_pass() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (mut before, mut after) = (Ingestor::new(), Ingestor::new());
+        // A first pass (nothing remembered), the same pass again (every day trimmed), and a
+        // pass that changed one file's day.
+        for bump in [0, 0, 7] {
+            let (old, old_remember) = all_at_once(pass(bump, dir.path()), &before);
+            let (new, new_remember) = shaped(pass(bump, dir.path()), &after);
+            assert!(old.len() > 2, "the pass sends reports");
+            assert_eq!(
+                String::from_utf8(new).expect("utf-8"),
+                String::from_utf8(old).expect("utf-8"),
+                "pass with bump {bump}"
+            );
+            assert_eq!(new_remember.len(), old_remember.len());
+            before.accept(old_remember, &HashSet::new());
+            after.accept(new_remember, &HashSet::new());
+        }
+    }
+
+    /// A computer's Claude part: `files` files, a session each; every third file a mirror.
+    fn claude_part(
+        host: &'static str,
+        state_index: usize,
+        files: usize,
+    ) -> claude_mirrors::Part<'static> {
+        let mut rows = Vec::new();
+        let mut srows = Vec::new();
+        let mut prints = Map::new();
+        for file in 0..files {
+            let key = format!("claude:/fixture/{host}/{file}.jsonl");
+            let at = NOW - (file as i64 % 3) * DAY - HOUR_MS;
+            let iso = iso(at);
+            rows.push(json!({"k": "claude", "f": key, "m": "claude-opus-4-5",
+                "h": format!("{} {}:00", &iso[..10], &iso[11..13]),
+                "i": 100 + file as u64, "o": 20, "cr": 500, "cw": 30, "n": 2}));
+            srows.push(json!({"k": "claude", "f": key, "s": session_id(file),
+                "m": "claude-opus-4-5", "a": at - HOUR_MS, "z": at,
+                "i": 100 + file as u64, "o": 20, "cr": 500, "cw": 30, "n": 2}));
+            prints.insert(
+                key,
+                json!({"claudeName": format!("name-{}", file % 5),
+                    "claudeMirror": file % 3 == 0}),
+            );
+        }
+        let typed = |rows: &[Value]| -> Vec<aac_store::scan_row::ScanRow> {
+            rows.iter()
+                .map(|row| serde_json::from_value(row.clone()).expect("scanner row"))
+                .collect()
+        };
+        claude_mirrors::Part {
+            host,
+            state_index,
+            rows: typed(&rows),
+            sessions: typed(&srows),
+            identities: scan_print::Identities::from_value(&Value::Object(prints)),
+        }
+    }
+
+    fn claude_states() -> Vec<Value> {
+        vec![
+            source("claude", "ubuntu", "ok"),
+            source("codex", "ubuntu", "ok"),
+            source("claude", "mac", "ok"),
+            json!({"tool": "claude", "host": "nas1", "state": "unreadable",
+                "cause": "agent_missing"}),
+            source("claude", "odroid", "ok"),
+        ]
+    }
+
+    fn claude_parts() -> Vec<claude_mirrors::Part<'static>> {
+        vec![
+            claude_part("ubuntu", 0, 30),
+            claude_part("mac", 2, 12),
+            claude_part("odroid", 4, 3),
+        ]
+    }
+
+    #[test]
+    fn claude_parts_set_aside_and_shaped_one_at_a_time_match_one_call() {
+        let dir = tempfile::tempdir().expect("dir");
+        let pricing = ResolverPricing::new(dir.path());
+        let owned = scanner_owned();
+        let none = HashSet::new();
+        let open = |name: &str| {
+            aac_store::ops::open_engine(&dir.path().join(name).to_string_lossy(), None, None)
+                .expect("store")
+        };
+        let (old_store, new_store) = (open("old"), open("new"));
+        let (old_ingestor, new_ingestor) = (Ingestor::new(), Ingestor::new());
+        for round in 0..2 {
+            // Before: owners over the parts, every worker held, one report call.
+            let mut states = claude_states();
+            let mut parts = claude_parts();
+            claude_contributions::prepare_live(&old_store, &mut parts, &mut states, NOW, &pricing)
+                .expect("owners");
+            let remote: Vec<Value> = parts
+                .iter()
+                .map(|part| {
+                    json!({"tool": "claude", "host": part.host,
+                        "data": part.worker(NOW, &pricing)})
+                })
+                .collect();
+            let reports = report::build_activity_reports_owned(OwnedReportArgs {
+                local: HashMap::new(),
+                remote,
+                states: &states,
+                window_from_ms: NOW - 31 * DAY,
+                now: NOW,
+                local_complete: &none,
+                scanner_owned: &owned,
+            });
+            let (trimmed, _) = old_ingestor.trim(&reports);
+            let old = serde_json::to_vec(&report::contract_reports(&trimmed).expect("typed"))
+                .expect("bytes");
+            let old_states = states;
+            // After: the parts set aside, read back, shaped one computer at a time.
+            let mut states = claude_states();
+            let parked: Vec<_> = claude_parts().into_iter().map(|part| part.park()).collect();
+            let frame = ReportFrame {
+                window_from_ms: NOW - 31 * DAY,
+                now: NOW,
+                local_complete: &none,
+                scanner_owned: &owned,
+            };
+            let mut shaped = Shaped::default();
+            shape_claude(
+                &new_store,
+                parked,
+                &mut states,
+                &pricing,
+                &frame,
+                &mut shaped,
+                &new_ingestor,
+            );
+            let rest = shaped.rest_sources(&states);
+            let built = Shaped::build(&frame, &states, rest, HashMap::new(), Vec::new());
+            shaped.keep(&new_ingestor, built);
+            let (typed, _) = shaped.finish().expect("typed");
+            let new = serde_json::to_vec(&typed).expect("bytes");
+            assert_eq!(states, old_states, "round {round}: states");
+            assert_eq!(
+                String::from_utf8(new).expect("utf-8"),
+                String::from_utf8(old).expect("utf-8"),
+                "round {round}: reports"
+            );
+            for key in [
+                claude_mirrors::LIVE,
+                claude_mirrors::HISTORY,
+                claude_mirrors::HISTORY_MIRRORS,
+            ] {
+                assert_eq!(
+                    aac_store::analytics_cache::get(&new_store, key).expect("new"),
+                    aac_store::analytics_cache::get(&old_store, key).expect("old"),
+                    "round {round}: {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_refused_report_stops_the_whole_pass_ingest() {
+        let owned = scanner_owned();
+        let none = HashSet::new();
+        let frame = ReportFrame {
+            window_from_ms: NOW - 31 * DAY,
+            now: NOW,
+            local_complete: &none,
+            scanner_owned: &owned,
+        };
+        let mut shaped = Shaped::default();
+        let ingestor = Ingestor::new();
+        let states = vec![source("codex", "ubuntu", "ok")];
+        let built = Shaped::build(&frame, &states, vec![0], HashMap::new(), Vec::new());
+        shaped.keep(&ingestor, built);
+        // A report the typed contract cannot read (its schema field is not text).
+        shaped.keep(&ingestor, vec![(1, json!({"schema": 1}))]);
+        assert!(shaped.is_built(1));
+        assert!(shaped.finish().is_none());
     }
 }

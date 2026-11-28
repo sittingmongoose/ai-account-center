@@ -17,6 +17,14 @@
 //! (tuned mimalloc underneath, as the service runs) every 50 ms:
 //!
 //! `cargo test -p aac-http --release --features memory-twin --lib memory_twin_soak -- --ignored --nocapture --test-threads=1`
+//!
+//! The whole pass (spike 7) runs one pass over the seven computers without the transport, then
+//! the pass's end (Claude mirror owners, reports, trim, typed contract, ingest), both the way the
+//! pass runs now and the way it held every worker result to its end, and checks they ingest
+//! the same typed reports. The Linux default allocator feature is left out, so the counter
+//! sits on mimalloc as the other twins expect:
+//!
+//! `cargo test -p aac-http --no-default-features --features memory-twin --lib memory_twin_whole_pass -- --ignored --nocapture --test-threads=1`
 use super::scan_answer::Answer;
 use super::scan_state::{self, Cache};
 use aac_store::collect;
@@ -850,4 +858,300 @@ fn memory_twin_soak() {
         })
         .collect();
     println!("5-minute troughs heap/rss MiB: {}", troughs.join("  "));
+}
+
+/// One whole pass over the seven soak computers without the transport, then the pass's end as
+/// `activity_pass` runs it: Claude mirror owners, the Claude workers, the reports, the trim, the
+/// typed contract and the ingest. `shaped` builds each computer's reports as soon as it is read
+/// (the pass since spike 7); otherwise every worker result is held to the end, as before.
+/// Returns the pass peak above its start and a digest of the typed reports it ingested.
+fn whole_pass(
+    engine: &aac_store::engine::Engine,
+    twins: &[(&str, Twin)],
+    lines: &HashMap<String, Vec<u8>>,
+    ingestor: &mut aac_store::report::Ingestor,
+    round: u64,
+    shaped: bool,
+) -> (usize, Vec<u8>) {
+    use std::collections::HashSet;
+    let pricing = super::ResolverPricing::new(std::path::Path::new("/nonexistent-twin"));
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
+    let now = twins[0].1.now;
+    let cutoff = now - 31 * DAY;
+    let scanner_owned: HashSet<String> = kinds.iter().cloned().collect();
+    let local_complete = HashSet::new();
+    let frame = super::ReportFrame {
+        window_from_ms: cutoff,
+        now,
+        local_complete: &local_complete,
+        scanner_owned: &scanner_owned,
+    };
+    let mut held = super::Shaped::default();
+    let mut meter = Meter::new();
+    let mut remote: Vec<Value> = Vec::new();
+    let mut claude = Vec::new();
+    let mut parked = Vec::new();
+    let mut states: Vec<Value> = Vec::new();
+    for (host, twin) in twins {
+        meter.step("one computer (load, apply, save, shape)", || {
+            let start_state = states.len();
+            let mut cache = Cache::load(engine, host).expect("load");
+            let args = super::scan_request(&kinds, cutoff, json!({}), false, None);
+            let requests = scan_state::Requests::new(
+                args,
+                &kinds,
+                &cache.fingerprints,
+                &twin.settled_before,
+                twin.now,
+            );
+            let mut claude_state = None;
+            for batch in requests.batches.clone() {
+                let args = requests
+                    .args(&batch, &cache.fingerprints)
+                    .expect("request fits");
+                let packed: Vec<bool> = batch
+                    .iter()
+                    .map(|kind| args.packed.contains(kind))
+                    .collect();
+                drop(args);
+                let line = &lines[&format!("{host}:{round}:{}", batch.join(","))];
+                let mut answer = Answer::parse(line, &mut cache.strings).expect("answer");
+                assert!(super::valid_scan_answer(&answer, &batch));
+                for (kind, packed) in batch.iter().zip(packed) {
+                    let source = super::scanned_kind(
+                        &mut answer,
+                        kind,
+                        host,
+                        (twin.now, cutoff),
+                        (packed, false, false),
+                        &mut cache,
+                    );
+                    assert_eq!(source["state"], "ok", "{host} {kind}: {source}");
+                    if kind == "claude" {
+                        claude_state = Some(states.len());
+                    } else {
+                        let worker = collect::worker_from_rows(
+                            &scan_state::of_kind(&cache.rows, kind),
+                            &scan_state::of_kind(&cache.srows, kind),
+                            host,
+                            twin.now,
+                            &pricing,
+                        );
+                        remote.push(json!({ "tool": kind, "host": host, "data": worker }));
+                    }
+                    states.push(source);
+                }
+            }
+            cache.save(engine, host).expect("save");
+            if let Some(state_index) = claude_state {
+                let (rows, sessions, identities) = cache.take_kind("claude");
+                let part = super::claude_mirrors::Part {
+                    host,
+                    state_index,
+                    rows,
+                    sessions,
+                    identities,
+                };
+                if shaped {
+                    parked.push(part.park());
+                } else {
+                    claude.push(part);
+                }
+            }
+            drop(cache);
+            if shaped {
+                let early = super::Shaped::computer_sources(&states, start_state, &scanner_owned);
+                let built = super::Shaped::build(
+                    &frame,
+                    &states,
+                    early,
+                    HashMap::new(),
+                    std::mem::take(&mut remote),
+                );
+                held.keep(ingestor, built);
+            }
+        });
+    }
+    let (typed, remember) = if shaped {
+        meter.step("Claude: parts back, owners, reports", || {
+            super::shape_claude(
+                engine,
+                std::mem::take(&mut parked),
+                &mut states,
+                &pricing,
+                &frame,
+                &mut held,
+                ingestor,
+            );
+            for source in &states {
+                assert_ne!(source["cause"], "store_unavailable");
+            }
+            let rest = held.rest_sources(&states);
+            let built = super::Shaped::build(&frame, &states, rest, HashMap::new(), Vec::new());
+            held.keep(ingestor, built);
+            std::mem::take(&mut held).finish().expect("contract")
+        })
+    } else {
+        meter.step("Claude mirror owners (prepare_live)", || {
+            super::claude_contributions::prepare_live(
+                engine,
+                &mut claude,
+                &mut states,
+                now,
+                &pricing,
+            )
+            .expect("prepare live");
+        });
+        meter.step("Claude workers", || {
+            for part in claude.drain(..) {
+                let worker = part.worker(now, &pricing);
+                remote.push(json!({ "tool": "claude", "host": part.host, "data": worker }));
+            }
+        });
+        let reports = meter.step("build the reports", || {
+            aac_store::report::build_activity_reports_owned(aac_store::report::OwnedReportArgs {
+                local: HashMap::new(),
+                remote: std::mem::take(&mut remote),
+                states: &states,
+                window_from_ms: cutoff,
+                now,
+                local_complete: &local_complete,
+                scanner_owned: &scanner_owned,
+            })
+        });
+        let (trimmed, remember) = meter.step("trim against the last pass", || {
+            let out = ingestor.trim(&reports);
+            drop(reports);
+            out
+        });
+        let typed = meter.step("typed contract reports", || {
+            let out = aac_store::report::contract_reports(&trimmed).expect("contract");
+            drop(trimmed);
+            out
+        });
+        (typed, remember)
+    };
+    let digest = serde_json::to_vec(&typed).expect("typed reports");
+    meter.step("ingest", || {
+        let result = aac_store::activity::ingest(engine, &typed).expect("ingest");
+        let refused: HashSet<usize> = result
+            .refused
+            .iter()
+            .filter_map(|r| r["index"].as_u64().map(|i| i as usize))
+            .collect();
+        ingestor.accept(remember, &refused);
+        drop(typed);
+    });
+    drop(states);
+    let title = if shaped {
+        "whole pass, each computer's reports shaped as it is read"
+    } else {
+        "whole pass, every worker result held to the end (before)"
+    };
+    (meter.report(title), digest)
+}
+
+/// A seeded store, its computers, and every answer of every round by `host:round:batch`.
+type WholePassSetup = (
+    aac_store::engine::Engine,
+    Vec<(&'static str, Twin)>,
+    HashMap<String, Vec<u8>>,
+);
+
+/// The seven live-shaped computers seeded into a fresh store, and every answer of four rounds.
+fn whole_pass_setup(dir: &std::path::Path) -> WholePassSetup {
+    let engine = store(dir);
+    let kinds: Vec<String> = tools().into_iter().map(|(k, ..)| k.to_owned()).collect();
+    let twins: Vec<(&str, Twin)> = SOAK_HOSTS
+        .iter()
+        .map(|(host, scale)| (*host, Twin::scaled(*scale)))
+        .collect();
+    let mut lines = HashMap::new();
+    for (host, twin) in &twins {
+        let checkpoint = serde_json::to_vec(&twin.checkpoint()).expect("checkpoint");
+        aac_store::analytics_cache::put(&engine, &format!("live/scanner/{host}"), &checkpoint)
+            .expect("seed checkpoint");
+        drop(checkpoint);
+        let cache = Cache::load(&engine, host).expect("load");
+        let args = super::scan_request(&kinds, twin.now - 31 * DAY, json!({}), false, None);
+        for (batch, args) in scan_state::requests(
+            args,
+            &kinds,
+            &cache.fingerprints,
+            &twin.settled_before,
+            twin.now,
+        ) {
+            args.expect("request fits");
+            for round in 1..=WHOLE_PASS_ROUNDS {
+                let line = result_line("twin", &twin.answer(&batch, round));
+                let fields: BTreeMap<String, &RawValue> =
+                    serde_json::from_slice(&line[..line.len() - 1]).expect("event");
+                let value = fields["value"].get().as_bytes().to_vec();
+                lines.insert(format!("{host}:{round}:{}", batch.join(",")), value);
+            }
+        }
+        drop(cache);
+        let mut cache = Cache::load(&engine, host).expect("load");
+        cache.save(&engine, host).expect("migrate");
+    }
+    (engine, twins, lines)
+}
+
+const WHOLE_PASS_ROUNDS: u64 = 4;
+/// The steady pass's ceiling above its start (live-shaped seven computers). Holding every
+/// worker result to the pass's end peaked at about 94 MiB; the busy computer's own checkpoint
+/// and apply (about 62 MiB) now set the peak.
+const WHOLE_PASS_CEILING_MIB: f64 = 70.0;
+
+/// The whole pass both ways, over two stores seeded alike: the same typed reports are ingested
+/// each round, and the per-computer shaping's peak stays low. The first round sends every cell
+/// (a fresh ingestor, as after a restart); the later rounds are the steady passes live repeats.
+#[test]
+#[ignore = "memory twin: run alone with --features memory-twin --ignored --test-threads=1"]
+fn memory_twin_whole_pass() {
+    let mut peaks = Vec::new();
+    let mut digests = Vec::new();
+    for shaped in [false, true] {
+        let dir = tempfile::tempdir().expect("twin dir");
+        let (engine, twins, lines) = whole_pass_setup(dir.path());
+        let mut ingestor = aac_store::report::Ingestor::new();
+        let mut run = Vec::new();
+        let mut sent = Vec::new();
+        for round in 1..=WHOLE_PASS_ROUNDS {
+            let (peak, digest) = whole_pass(&engine, &twins, &lines, &mut ingestor, round, shaped);
+            run.push(peak);
+            sent.push(digest);
+        }
+        peaks.push(run);
+        digests.push(sent);
+    }
+    let line = |run: &[usize]| {
+        run.iter()
+            .map(|p| format!("{:.1}", mib(*p)))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    println!("\nRESULT whole pass peaks MiB, before: {}", line(&peaks[0]));
+    println!("RESULT whole pass peaks MiB, after:  {}", line(&peaks[1]));
+    for (round, (before, after)) in digests[0].iter().zip(&digests[1]).enumerate() {
+        println!(
+            "round {}: typed reports {:.2} MiB, identical: {}",
+            round + 1,
+            mib(before.len()),
+            before == after
+        );
+        assert!(
+            before == after,
+            "round {}: the typed reports differ",
+            round + 1
+        );
+    }
+    for (round, peak) in peaks[1].iter().enumerate().skip(1) {
+        assert!(
+            mib(*peak) < WHOLE_PASS_CEILING_MIB,
+            "steady round {}: pass peak {:.1} MiB, ceiling {WHOLE_PASS_CEILING_MIB} MiB",
+            round + 1,
+            mib(*peak)
+        );
+    }
 }

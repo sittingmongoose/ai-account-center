@@ -40,6 +40,98 @@ impl Part<'_> {
     }
 }
 
+/// A computer's Claude part set aside while the pass reads the other computers: its rows,
+/// sessions and identities, written in the checkpoint's row format and compressed. Rows and
+/// sessions come back in their order, every field as it was.
+pub(super) enum Parked<'a> {
+    /// Kept as it is (it could not be written).
+    Held(Part<'a>),
+    Aside {
+        host: &'a str,
+        state_index: usize,
+        bytes: Vec<u8>,
+    },
+}
+
+#[derive(serde::Serialize)]
+struct PartRef<'a> {
+    rows: &'a [ScanRow],
+    sessions: &'a [ScanRow],
+    identities: Vec<(&'a str, &'a str, bool)>,
+}
+
+#[derive(serde::Deserialize)]
+struct PartOwned {
+    rows: Vec<ScanRow>,
+    sessions: Vec<ScanRow>,
+    identities: Vec<(String, String, bool)>,
+}
+
+impl<'a> Part<'a> {
+    /// Set the part aside, compressed (a part that cannot be written is kept as it is).
+    pub(super) fn park(self) -> Parked<'a> {
+        let bytes = (|| {
+            let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1).ok()?;
+            serde_json::to_writer(
+                &mut encoder,
+                &PartRef {
+                    rows: &self.rows,
+                    sessions: &self.sessions,
+                    identities: self.identities.entries().collect(),
+                },
+            )
+            .ok()?;
+            encoder.finish().ok()
+        })();
+        match bytes {
+            Some(bytes) => Parked::Aside {
+                host: self.host,
+                state_index: self.state_index,
+                bytes,
+            },
+            None => Parked::Held(self),
+        }
+    }
+}
+
+impl<'a> Parked<'a> {
+    /// The index of the part's source in the pass's states.
+    pub(super) fn state_index(&self) -> usize {
+        match self {
+            Parked::Held(part) => part.state_index,
+            Parked::Aside { state_index, .. } => *state_index,
+        }
+    }
+
+    /// The part as it was set aside.
+    pub(super) fn restore(self) -> Result<Part<'a>> {
+        let (host, state_index, bytes) = match self {
+            Parked::Held(part) => return Ok(part),
+            Parked::Aside {
+                host,
+                state_index,
+                bytes,
+            } => (host, state_index, bytes),
+        };
+        let (owned, _) = aac_store::scan_row::with_interner(Default::default(), || {
+            zstd::stream::read::Decoder::new(&bytes[..])
+                .map_err(Error::from)
+                .and_then(|decoder| {
+                    serde_json::from_reader::<_, PartOwned>(std::io::BufReader::new(decoder))
+                        .map_err(Error::from)
+                })
+        });
+        let owned = owned?;
+        Ok(Part {
+            host,
+            state_index,
+            rows: owned.rows,
+            sessions: owned.sessions,
+            identities: Identities::from_entries(owned.identities),
+        })
+    }
+}
+
 /// One parsed owner map per (store instance, key) for the whole process: the activity pass
 /// re-reads these maps every minute, and the redb read plus JSON parse of the published-mirror
 /// map was about 100 MB of transient work per pass. `save` refreshes the entry; a new store
@@ -256,6 +348,63 @@ mod tests {
 
     fn state(host: &str, word: &str) -> Value {
         json!({ "tool": "claude", "host": host, "state": word })
+    }
+
+    #[test]
+    fn a_parked_part_comes_back_as_it_was() {
+        let mut rows = Vec::new();
+        let mut sessions = Vec::new();
+        let mut prints = serde_json::Map::new();
+        for index in 0..40u64 {
+            let file = format!("file-{index}");
+            rows.push(json!({
+                "f": file, "k": "claude", "m": format!("model-{}", index % 3),
+                "h": format!("2026-11-{:02} {:02}:00", 1 + index % 27, index % 24),
+                "i": index * 7, "o": index, "cr": 3, "cw": 4, "c": 0.1 + index as f64 / 3.0,
+                "n": index % 5,
+                "p": if index % 2 == 0 { json!("anthropic") } else { Value::Null },
+                "costBasis": if index % 7 == 0 { json!("unknown") } else { Value::Null },
+            }));
+            sessions.push(json!({
+                "f": file, "k": "claude", "m": "claude-opus-4-5", "s": format!("{index:016x}"),
+                "a": 1_795_000_000_000u64 + index, "z": 1_795_000_100_000u64 + index,
+                "i": 1, "o": 2, "cr": 3, "cw": 4, "c": 0.0, "n": 1,
+            }));
+            prints.insert(
+                file,
+                json!({"claudeName": format!("name-{}", index % 4),
+                    "claudeMirror": index % 3 == 0}),
+            );
+        }
+        let part = Part {
+            host: "nas1",
+            state_index: 7,
+            rows: typed(&rows),
+            sessions: typed(&sessions),
+            identities: Identities::from_value(&Value::Object(prints)),
+        };
+        let (rows, sessions, identities) = (
+            part.rows.clone(),
+            part.sessions.clone(),
+            part.identities.clone(),
+        );
+        let parked = part.park();
+        assert!(matches!(parked, Parked::Aside { .. }), "set aside");
+        assert_eq!(parked.state_index(), 7);
+        let back = parked.restore().expect("restore");
+        assert_eq!((back.host, back.state_index), ("nas1", 7));
+        assert_eq!(back.rows, rows);
+        assert_eq!(back.sessions, sessions);
+        let sorted = |identities: &Identities| {
+            let mut entries: Vec<(String, String, bool)> = identities
+                .entries()
+                .map(|(file, name, mirror)| (file.to_owned(), name.to_owned(), mirror))
+                .collect();
+            entries.sort();
+            entries
+        };
+        assert_eq!(back.identities.len(), identities.len());
+        assert_eq!(sorted(&back.identities), sorted(&identities));
     }
 
     #[test]

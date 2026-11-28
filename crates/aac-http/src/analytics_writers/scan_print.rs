@@ -449,6 +449,34 @@ impl Identities {
     pub fn values(&self) -> impl Iterator<Item = (&str, bool)> {
         self.0.values().map(|(name, mirror)| (&**name, *mirror))
     }
+
+    /// Every (file key, name, mirror) entry, in no particular order.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, bool)> {
+        self.0
+            .iter()
+            .map(|(file, (name, mirror))| (&**file, &**name, *mirror))
+    }
+
+    /// The identities of these entries; one name is held once, as [`Identities::of`] holds it.
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, String, bool)>) -> Self {
+        let mut names: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        Identities(
+            entries
+                .into_iter()
+                .map(|(file, name, mirror)| {
+                    let name: Arc<str> = Arc::from(name);
+                    let name = Arc::clone(names.entry(Arc::clone(&name)).or_insert(name));
+                    (Arc::from(file), (name, mirror))
+                })
+                .collect(),
+        )
+    }
+
+    /// The number of files with an identity.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[cfg(test)]
