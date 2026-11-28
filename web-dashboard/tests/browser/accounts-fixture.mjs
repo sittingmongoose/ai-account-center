@@ -134,6 +134,10 @@ export function fakeServer(over = {}) {
 		trash: [{ trashId: 'tr_0123456789abcdef', provider: 'claude', label: 'old-profile', state: 'trashed', trashedAt: at(-60 * 24), purgeAfter: at(60 * 24 * 29) }],
 		removed: new Set(),
 		labels: new Map(),
+		// the owner's display emails (PATCH {email}); shown as ownerEmail where the provider reports none
+		emails: new Map(),
+		// accounts a check adds to the dashboard and the registry
+		extra: [],
 		runningJobs: [],
 		rich: false,
 		loginsStep3: false,
@@ -142,7 +146,7 @@ export function fakeServer(over = {}) {
 	};
 	const registry = () => ({
 		providers: [],
-		accounts: dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 }).accounts.map((a) => regAccount(a.id, a.provider,
+		accounts: [...dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 }).accounts, ...s.extra].map((a) => regAccount(a.id, a.provider,
 			// The live logins: only their Remove is refused (they sign in again in place).
 			a.id === 'codex:one' || a.id === 'antigravity:a1' ? { removeRefusal: 'account_active' }
 				: a.provider === 'kimi-code' ? { credential: { kind: 'aac-key', last4: '9f3a' } } : {}))
@@ -154,8 +158,9 @@ export function fakeServer(over = {}) {
 	const routes = [
 		['GET', /^\/api\/accounts\/dashboard$/, () => {
 			const d = dashboard({ rich: s.rich, loginsStep3: s.loginsStep3 });
-			d.accounts = d.accounts.filter((a) => !s.removed.has(a.id));
+			d.accounts = [...d.accounts, ...s.extra.map((a) => ({ ...a }))].filter((a) => !s.removed.has(a.id));
 			for (const a of d.accounts) if (s.labels.has(a.id)) a.label = s.labels.get(a.id);
+			for (const a of d.accounts) if (!a.email && s.emails.has(a.id)) a.ownerEmail = s.emails.get(a.id);
 			return json(200, d);
 		}],
 		['GET', /^\/api\/accounts\/registry$/, () => json(200, registry())],
@@ -237,6 +242,13 @@ export function fakeServer(over = {}) {
 			if (!label || [...label].length > 48) return json(400, { code: 'invalid_body', error: 'That was not accepted' });
 			// a name the fixture refuses the way the server refuses a rename during another change
 			if (label === 'Busy name') return json(409, { code: 'activation_running', error: 'Another change to these saved logins is running. Wait for it to finish.' });
+			// the owner's display email, as the server takes it: registry accounts only, a plain shape, empty or null clears
+			if ('email' in (body || {})) {
+				if (/^(claude|codex|antigravity):/.test(id)) return json(400, { code: 'email_from_provider', error: 'This account\'s email comes from its provider, so it cannot be edited here.' });
+				const email = typeof body.email === 'string' ? body.email.trim() : '';
+				if (email && !/^[^@\s]+@[^@\s]+\.[^@\s.]+$/.test(email)) return json(400, { code: 'invalid_email', error: 'That email does not look like name@example.com.' });
+				if (email) s.emails.set(id, email); else s.emails.delete(id);
+			}
 			s.labels.set(id, label);
 			return json(200, { account: { id, label } });
 		}],

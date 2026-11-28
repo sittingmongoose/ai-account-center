@@ -53,6 +53,10 @@ pub struct Source {
     pub ssh_host: Option<String>,
     /// Label the owner chose.
     pub label: Option<String>,
+    /// An email the owner typed for an account whose provider reports none. Display only:
+    /// never an identity, attribution, sign-in or match key, and never over a provider email.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     /// Credential selector.
     pub credential: Credential,
     /// Original creation stamp.
@@ -110,16 +114,41 @@ pub(crate) fn is_additional_account_id(id: &str) -> bool {
 }
 
 pub(crate) fn valid_label(label: &str) -> bool {
-    use std::sync::LazyLock;
-    static UNPRINTABLE: LazyLock<Option<regex::Regex>> =
-        LazyLock::new(|| regex::Regex::new(r"[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]").ok());
     (1..=48).contains(&label.chars().count())
         && label
             .chars()
             .any(|c| !crate::claude_account_store::is_js_space(c))
-        && UNPRINTABLE
-            .as_ref()
-            .is_some_and(|pattern| !pattern.is_match(label))
+        && printable(label)
+}
+
+/// A plain email shape for the owner's display email: `name@domain.tld`, at most 254
+/// characters, no spaces or control characters, one `@`.
+pub(crate) fn valid_owner_email(email: &str) -> bool {
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    let Some((name, suffix)) = domain.rsplit_once('.') else {
+        return false;
+    };
+    email.chars().count() <= 254
+        && !local.is_empty()
+        && !name.is_empty()
+        && !suffix.is_empty()
+        && !domain.contains('@')
+        && !email.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || crate::claude_account_store::is_js_space(c)
+        })
+        && printable(email)
+}
+
+/// No control, format or line/paragraph separator characters.
+fn printable(text: &str) -> bool {
+    use std::sync::LazyLock;
+    static UNPRINTABLE: LazyLock<Option<regex::Regex>> =
+        LazyLock::new(|| regex::Regex::new(r"[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]").ok());
+    UNPRINTABLE
+        .as_ref()
+        .is_some_and(|pattern| !pattern.is_match(text))
 }
 
 impl Source {
@@ -130,6 +159,7 @@ impl Source {
             || !["mac", "windows", "ubuntu"].contains(&self.platform.as_str())
             || self.ssh_host.as_deref().is_some_and(|s| !alias(s))
             || self.label.as_deref().is_some_and(|s| !valid_label(s))
+            || self.email.as_deref().is_some_and(|s| !valid_owner_email(s))
             || self
                 .created_by
                 .as_deref()
@@ -280,6 +310,7 @@ pub(crate) fn legacy(root: Option<&Path>) -> (Vec<Source>, bool) {
                     .map_or_else(|| "ubuntu".into(), |row| row.platform.clone()),
                 ssh_host: entry.and_then(|row| row.ssh_host),
                 label: None,
+                email: None,
                 credential: Credential::Discover,
                 created_at: None,
                 created_by: None,
@@ -310,5 +341,43 @@ mod tests {
             parse_registry(&bytes(vec![migrated, capsule])),
             Err(Decline::Shape)
         );
+    }
+
+    /// The owner's display email is optional, round-trips, is left out when absent (an
+    /// existing file reads and writes back unchanged), and a bad shape declines the file.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_registry_entry_takes_an_optional_owner_email() {
+        let bytes =
+            |rows| serde_json::to_vec(&json!({"version":2,"accounts":rows})).expect("fixture");
+        let entry = json!({"id":"opencode-go:acct:0123abcd","provider":"opencode-go","platform":"ubuntu",
+            "label":"Account 2","credential":{"kind":"aac-key","keyId":"0123abcd"}});
+        let plain = parse_registry(&bytes(vec![entry.clone()])).expect("plain");
+        assert_eq!(plain[0].email, None);
+        assert!(
+            serde_json::to_value(&plain[0])
+                .unwrap()
+                .get("email")
+                .is_none()
+        );
+        let mut named = entry.clone();
+        named["email"] = json!("go@example.com");
+        let parsed = parse_registry(&bytes(vec![named])).expect("named");
+        assert_eq!(parsed[0].email.as_deref(), Some("go@example.com"));
+        assert_eq!(
+            serde_json::to_value(&parsed[0]).unwrap()["email"],
+            "go@example.com"
+        );
+        for bad in ["nope", "a b@example.com", "a@b"] {
+            let mut broken = entry.clone();
+            broken["email"] = json!(bad);
+            assert_eq!(
+                parse_registry(&bytes(vec![broken])),
+                Err(Decline::Shape),
+                "{bad}"
+            );
+        }
+        assert!(valid_owner_email("first.last+tag@sub.example.co"));
+        assert!(!valid_owner_email("me@example.com\u{200b}"));
     }
 }

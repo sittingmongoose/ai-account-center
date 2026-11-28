@@ -29,6 +29,18 @@ pub(super) fn email(value: &Value) -> Option<String> {
     .then_some(text)
 }
 
+/// The email the owner typed for an account whose provider reports none, under its own key
+/// (`ownerEmail`): display only. `email` stays the provider's, so the analytics identity, the
+/// history keys and every match never see it, and a provider email always wins.
+pub(super) fn owner_email(row: &mut Value, source: &Source) {
+    if let Some(email) = source.email.as_deref()
+        && row.is_object()
+        && row["email"].as_str().is_none_or(str::is_empty)
+    {
+        row["ownerEmail"] = json!(email);
+    }
+}
+
 fn number(value: &Value) -> Option<f64> {
     value.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
 }
@@ -468,5 +480,33 @@ mod tests {
             claude(&blank, Desktop::Mac, None, None).unwrap()["label"],
             "work"
         );
+    }
+
+    /// The owner's display email rides under its own key, only when the provider reports
+    /// none, and `email` (the analytics identity) never changes.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn an_owner_email_is_shown_beside_a_missing_provider_email_and_never_replaces_it() {
+        let mut source: Source = serde_json::from_value(json!({
+            "id":"opencode-go:acct:0123abcd","provider":"opencode-go","platform":"ubuntu",
+            "sshHost":null,"label":"Account 2","email":"go@example.com",
+            "credential":{"kind":"aac-key","keyId":"0123abcd"},"createdAt":null,"createdBy":null
+        }))
+        .expect("a registry entry");
+        let mut row = additional(&source, "ubuntu", "Ubuntu", None);
+        owner_email(&mut row, &source);
+        assert_eq!(
+            (&row["label"], &row["email"], &row["ownerEmail"]),
+            (&json!("Account 2"), &Value::Null, &json!("go@example.com"))
+        );
+        let provider = json!({"status":"ok","email":"real@example.com","windows":[{"key":"w","label":"Weekly","usedPercent":3}]});
+        let mut row = additional(&source, "ubuntu", "Ubuntu", Some(&provider));
+        owner_email(&mut row, &source);
+        assert_eq!(row["email"], "real@example.com");
+        assert!(row.get("ownerEmail").is_none());
+        source.email = None;
+        let mut row = additional(&source, "ubuntu", "Ubuntu", None);
+        owner_email(&mut row, &source);
+        assert!(row.get("ownerEmail").is_none());
     }
 }

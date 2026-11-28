@@ -252,6 +252,7 @@ mod tests {
             platform: "ubuntu".into(),
             ssh_host: None,
             label: Some("Cursor".into()),
+            email: None,
             credential: crate::account_usage::sources::Credential::Discover,
             created_at: None,
             created_by: None,

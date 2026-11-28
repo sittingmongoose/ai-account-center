@@ -762,6 +762,7 @@ mod tests {
                 platform: "ubuntu".into(),
                 ssh_host: None,
                 label: None,
+                email: None,
                 credential: sources::Credential::Discover,
                 created_at: None,
                 created_by: None,

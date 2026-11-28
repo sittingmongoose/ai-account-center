@@ -8,7 +8,7 @@
 // labelled as projections; at most two decimals.
 import { antigravityWindowLabel } from './antigravity-data.mjs';
 import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel } from './visible-usage.mjs';
-import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
+import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders, accountName } from './view-model.mjs';
 import { H, D, clockTxt, hourTxt, mdTxt, wmdTxt, wdTxt, timeTxt, duration, untilTxt, dayStart, addDays, bucketStart, nextBucket, dashLine, dashPolyline } from './analytics-usage.mjs';
 import { zonedAddDays, zonedHour, zonedHourStart } from './time-format.mjs';
 
@@ -116,7 +116,7 @@ export function quotaAccounts(payload, ctx = {}) {
       raw: w,
     }));
     return {
-      id: a.id, provider: a.provider, email: text(a.email) || text(a.label) || 'Identity unavailable', label: text(a.label), plan: text(a.plan),
+      id: a.id, provider: a.provider, email: accountName(a, 'Identity unavailable').heading, label: text(a.label), plan: text(a.plan),
       windows, analytics,
     };
   });

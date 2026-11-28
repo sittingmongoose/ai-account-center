@@ -483,6 +483,8 @@ pub fn render_snapshot_markdown(snapshot: &Value, sign_in_now: i64) -> String {
         let label = member(account, "label").as_str().unwrap_or("");
         let email = member(account, "email")
             .as_str()
+            .filter(|e| !e.is_empty())
+            .or_else(|| member(account, "ownerEmail").as_str())
             .filter(|e| !e.is_empty() && *e != label);
         let profile = member(account, "profile")
             .as_str()
@@ -563,6 +565,7 @@ fn projected_account(account: &Value) -> ProjectedAccount {
         provider_label: String::new(),
         label: String::new(),
         email: None,
+        owner_email: None,
         profile: None,
         source: None,
         plan: None,

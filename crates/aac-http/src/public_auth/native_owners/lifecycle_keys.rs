@@ -536,6 +536,7 @@ async fn add(
         platform: "ubuntu".into(),
         ssh_host: None,
         label,
+        email: None,
         credential: Credential::AacKey {
             key_id: slot.clone(),
         },

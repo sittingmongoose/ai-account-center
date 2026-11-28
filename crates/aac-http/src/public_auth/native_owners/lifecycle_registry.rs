@@ -512,10 +512,11 @@ mod tests {
             acts,
             [
                 ("recheck", "opencode-go:usage:cccccccc", true),
-                ("remove", "opencode-go:usage:cccccccc", false),
                 // An unnamed stored key binds its own wallet by its pinned id:
-                // pasting one console session for it is non-destructive.
+                // pasting one console session for it is non-destructive. Its wallet
+                // actions come before the key's Remove (r45 order: one trash, last).
                 ("paste-session", "opencode-go:usage:cccccccc", true),
+                ("remove", "opencode-go:usage:cccccccc", false),
             ]
         );
         assert!(
@@ -540,8 +541,13 @@ mod tests {
             .expect("Account 2");
         assert_eq!(acct2["actions"][0]["act"], "replace-key");
         assert_eq!(acct2["actions"][0]["enabled"], true);
-        assert_eq!(acct2["actions"][1]["act"], "remove");
-        assert_eq!(acct2["actions"][1]["enabled"], true);
+        // r45 order: the key's Remove (its one trash) comes last, after any wallet action.
+        let last = acct2["actions"]
+            .as_array()
+            .and_then(|a| a.last())
+            .expect("actions");
+        assert_eq!(last["act"], "remove");
+        assert_eq!(last["enabled"], true);
 
         // Without a discover parent in the registry, a digest row does not get stored-key actions.
         fs::write(

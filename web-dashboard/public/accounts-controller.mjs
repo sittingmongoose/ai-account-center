@@ -19,7 +19,7 @@ import { COMPUTERS } from './computers.mjs';
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
-import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS, labelProblem } from './account-actions.mjs';
+import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, webSessionProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS, labelProblem, emailProblem } from './account-actions.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord, platformLabel } from './view-model.mjs';
@@ -285,22 +285,31 @@ export function createAccountsController(deps) {
     });
   }
   /** One account's "Show in tray": only `trayHiddenAccountIds` is sent, so its dashboard switch is never touched. */
-  /** One account's display name ("<id>\n<new label>"); the id never changes. */
+  /**
+   * One account's display name ("<id>\n<new label>"), and its display email when the row offers the field
+   * ("<id>\n<new label>\n<email>", empty clears it); the id never changes.
+   */
   async function renameAccount(value) {
-    const [id = '', raw = ''] = value.split('\n');
+    const [id = '', raw = '', ...rest] = value.split('\n');
+    const withEmail = rest.length > 0;
     const next = String(raw).trim();
-    const problem = labelProblem(next);
+    const mail = withEmail ? String(rest.join('')).trim() : '';
+    const problem = labelProblem(next) || (withEmail ? emailProblem(mail) : '');
     if (!id || problem) {
       if (id) state.lines[id] = { kind: 'rename', title: problem, body: '' };
       changed();
       return;
     }
+    const before = accountOf(id);
+    const renamed = next !== text(before?.label).trim();
+    const mailChanged = withEmail && mail !== text(before?.ownerEmail);
     delete state.lines[id];
     changed();
     try {
-      await call(requests.renameAccount(id, next));
+      await call(requests.renameAccount(id, next, withEmail ? mail || null : undefined));
       delete state.lines[id];
-      toast('ok', `Renamed to ${next}`, 'It shows under that name everywhere.');
+      if (!renamed && mailChanged) toast('ok', mail ? `Email saved for ${next}` : `Email removed from ${next}`, mail ? `${mail} shows under the name.` : 'Only the name shows now.');
+      else toast('ok', `Renamed to ${next}`, mailChanged ? (mail ? `${mail} shows under the name.` : 'The email under it was removed.') : 'It shows under that name everywhere.');
       await reload();
     } catch (error) {
       if (error?.payload?.code === 'unknown_account') {

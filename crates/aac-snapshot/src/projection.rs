@@ -113,6 +113,8 @@ pub struct ProjectedAccount {
     pub label: String,
     /// The signed-in provider account email.
     pub email: Option<String>,
+    /// The email the owner typed for an account whose provider reports none (display only).
+    pub owner_email: Option<String>,
     /// AAC's saved profile name, when it is a short identifier.
     pub profile: Option<String>,
     /// Where AAC reads it, without path separators.
@@ -187,10 +189,16 @@ impl ProjectedAccount {
             ("providerLabel", json!(self.provider_label)),
             ("label", json!(self.label)),
             ("email", js::opt_str(self.email.as_deref())),
+        ];
+        // Only when set, so an export without one keeps its exact shape.
+        if let Some(email) = &self.owner_email {
+            members.push(("ownerEmail", json!(email)));
+        }
+        members.extend([
             ("profile", js::opt_str(self.profile.as_deref())),
             ("source", js::opt_str(self.source.as_deref())),
             ("plan", js::opt_str(self.plan.as_deref())),
-        ];
+        ]);
         if let Some(class) = &self.plan_class {
             members.push(("planClass", json!(class)));
         }
@@ -510,6 +518,10 @@ fn account_of(account: &Value, now: i64) -> Option<ProjectedAccount> {
         provider_label,
         label,
         email: text(member(account, "email"), 254),
+        owner_email: text(member(account, "email"), 254)
+            .is_none()
+            .then(|| text(member(account, "ownerEmail"), 254))
+            .flatten(),
         profile: profile_of(account),
         source: source_of(account),
         plan: plan_text(member(account, "plan")),
@@ -636,6 +648,48 @@ mod tests {
         assert!(!text.contains("sentinel-secret-value-7d1e"));
         assert_eq!(answer[0].profile.as_deref(), Some("gmail"));
         assert_eq!(answer[0].host, "ubuntu");
+    }
+
+    /// The owner's display email reaches the export under its own key, only when the
+    /// provider reports none; an account without one keeps the exact old shape.
+    #[test]
+    fn the_owners_display_email_is_exported_beside_a_missing_provider_email() {
+        let mut key = row();
+        key["provider"] = json!("opencode-go");
+        key["providerLabel"] = json!("OpenCode Go");
+        key["id"] = json!("opencode-go:acct:0123abcd");
+        key["label"] = json!("Account 2");
+        key["email"] = Value::Null;
+        key["ownerEmail"] = json!("go@example.com");
+        let mut both = row();
+        both["ownerEmail"] = json!("typed@example.com");
+        let answer = project_agent_usage(&[key, both, row()], 1_792_065_600_000, None, false);
+        let values: Vec<Value> = answer.iter().map(ProjectedAccount::value).collect();
+        let go = values
+            .iter()
+            .find(|v| v["provider"] == "opencode-go")
+            .expect("the OpenCode Go row");
+        assert_eq!(
+            (&go["email"], &go["ownerEmail"]),
+            (&Value::Null, &json!("go@example.com"))
+        );
+        let codex = values
+            .iter()
+            .find(|v| v["provider"] == "codex")
+            .expect("the Codex row");
+        assert_eq!(codex["email"], "person@example.com");
+        assert!(codex.get("ownerEmail").is_none());
+        let keys: Vec<&str> = codex
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            &keys[..5],
+            ["id", "provider", "providerLabel", "label", "email"]
+        );
+        assert_eq!(keys[5], "profile");
     }
 
     #[test]

@@ -35,7 +35,8 @@ export const requests = Object.freeze({
   addClaude: (profileId, name, email) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}), ...(email ? { email } : {}) } }),
   openClaude: (profileId, platform) => ({ method: 'POST', path: `/api/claude/desktop-profiles/${enc(profileId)}/open`, body: { platform } }),
   addKey: (provider, key, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, key, ...(name ? { label: name } : {}) } }),
-  renameAccount: (id, newLabel) => ({ method: 'PATCH', path: `/api/accounts/${enc(id)}`, body: { label: newLabel } }),
+  // `email` (the owner's display email, null clears it) is sent only when the row offers the field.
+  renameAccount: (id, newLabel, email) => ({ method: 'PATCH', path: `/api/accounts/${enc(id)}`, body: email === undefined ? { label: newLabel } : { label: newLabel, email } }),
   addSession: provider => ({ method: 'POST', path: '/api/accounts/add', body: { provider } }),
   addSupervised: (provider, profileName) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, profileName } }),
   signInAgain: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/signin-again`, body: {} }),
@@ -144,6 +145,23 @@ export function labelProblem(name) {
   if (!value) return 'Name the account first.';
   if (Array.from(value).length > 48) return 'Keep it within 48 characters.';
   if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) return 'That name has a character a name cannot contain.';
+  return '';
+}
+/**
+ * The owner's display email beside a name, checked the same way the server checks it (one @,
+ * a dot in the domain with something on both sides, no spaces or control characters, at most
+ * 254 characters). Empty is fine: it clears the email. '' when it is acceptable.
+ */
+export function emailProblem(email) {
+  const value = String(email ?? '').trim();
+  if (!value) return '';
+  const at = value.indexOf('@');
+  const domain = value.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  const shape = at > 0 && !domain.includes('@') && dot > 0 && dot < domain.length - 1;
+  if (!shape || Array.from(value).length > 254 || /[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\ufeff]/u.test(value)) {
+    return 'That email does not look like name@example.com.';
+  }
   return '';
 }
 /** A suggested name for a new profile that is not taken: "codex-4". */

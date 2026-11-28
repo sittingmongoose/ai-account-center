@@ -172,7 +172,7 @@ def matches(account, provider, needle, include_hidden):
     if provider and account.get("provider") != provider:
         return False
     if needle:
-        fields = [account.get(key) or "" for key in ("label", "email", "profile", "id")]
+        fields = [account.get(key) or "" for key in ("label", "email", "ownerEmail", "profile", "id")]
         if not any(needle.lower() in field.lower() for field in fields):
             return False
     return True
@@ -310,8 +310,10 @@ def cmd_show(args):
             current = account.get("providerLabel")
             print("\n" + current)
         who = [account.get("label") or "?"]
-        if account.get("email") and account["email"] != account.get("label"):
-            who.append(account["email"])
+        # ownerEmail: the email the owner typed for an account whose provider reports none
+        email = account.get("email") or account.get("ownerEmail")
+        if email and email != account.get("label"):
+            who.append(email)
         if account.get("profile") and account["profile"] != account.get("label"):
             who.append("profile " + account["profile"])
         facts = [fact for fact in (account.get("plan"), HOSTS.get(account.get("host"), account.get("host")),
