@@ -244,6 +244,7 @@ pub fn tick(
 ) -> Report {
     let scans = scan_all(cfg, st, deps);
     let now = (deps.now)();
+    let renewed_here = renewal_set(cfg, &scans);
     // Later readings of earlier renewals.
     for (_, scan) in &scans {
         for r in &scan.readings {
@@ -251,15 +252,16 @@ pub fn tick(
             if plan::verify(saved, r, now) == Verification::Reverted {
                 let key = r.key();
                 st.event(now, "reverted", Some(&key), r.email.as_deref(), None);
-                deps.say(&format!(
-                    "{key}: the renewed sign-in went back; renewing again"
-                ));
+                if renewed_here.as_ref().is_none_or(|keys| keys.contains(&key)) {
+                    deps.say(&format!(
+                        "{key}: the renewed sign-in went back; renewing again"
+                    ));
+                }
             }
         }
     }
     let skip: std::collections::HashSet<&str> = cfg.skip.iter().map(String::as_str).collect();
     let within = Config::ms(cfg.renew_within_hours);
-    let renewed_here = renewal_set(cfg, &scans);
     if let Some(keys) = &renewed_here {
         deps.say(&match &cfg.step3 {
             // A name the settings do not know renews nothing: say so, never pause silently.
@@ -809,6 +811,49 @@ mod tests {
             report.outcomes,
             vec![("windows/aaa".to_owned(), "renewed".to_owned())]
         );
+    }
+
+    fn state_with_a_reverted_renewal() -> State {
+        let mut st = State::default();
+        st.profiles.insert(
+            "windows/party".into(),
+            crate::state::ProfileState {
+                last_renew_at: Some(NOW - HOUR_MS),
+                expect_end: Some(NOW + 30 * 24 * HOUR_MS),
+                verify: vec![NOW + HOUR_MS],
+                ..crate::state::ProfileState::default()
+            },
+        );
+        st
+    }
+
+    fn reverted_log(step3: Step3) -> String {
+        let world = Arc::new(Mutex::new(World::default()));
+        let fake = Fake(world);
+        let lines = Mutex::new(vec![]);
+        let log = |l: &str| lines.lock().expect("lock").push(l.to_owned());
+        let now = || NOW;
+        let deps = Deps {
+            remote: &fake,
+            now: &now,
+            log: &log,
+            waits: fast(),
+            local: None,
+        };
+        let mut config = cfg();
+        config.step3 = step3;
+        let mut st = state_with_a_reverted_renewal();
+        tick(&config, &mut st, &deps, None, false, true);
+        lines.lock().expect("lock").join("\n")
+    }
+
+    #[test]
+    fn step3_does_not_announce_a_reverted_sign_in_outside_the_renewal_set() {
+        const MESSAGE: &str = "the renewed sign-in went back; renewing again";
+        let cut = reverted_log(Step3::RenewOnly("mac".into()));
+        assert!(!cut.contains(MESSAGE), "{cut}");
+        let kept = reverted_log(Step3::RenewOnly("windows".into()));
+        assert!(kept.contains(MESSAGE), "{kept}");
     }
 
     /// Step 3, review low 2: a switch naming a computer these settings do not know renews nothing,

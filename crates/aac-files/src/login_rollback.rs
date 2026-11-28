@@ -302,6 +302,17 @@ fn moved_path(places: &Places, id: &str) -> PathBuf {
     places.folder().join(format!("{id}.moved"))
 }
 
+fn moved_facts(places: &Places, id: &str) -> Option<(u64, String)> {
+    let path = moved_path(places, id);
+    let policy = ReadPolicy::capped(MAX_LOGIN_FILE)
+        .owner(Owner::Mine)
+        .ancestors(Ancestors::NoLinkBelow(&places.ccs));
+    match read::read(&path, &policy) {
+        Read::Bytes(bytes, _) if single_link(&path) => Some((bytes.len() as u64, digest(&bytes))),
+        _ => None,
+    }
+}
+
 /// Undo the moves that succeeded. The recovery record is removed only when every inverse move
 /// succeeded; otherwise it is rewritten to the entries still quarantined, so a failed recovery
 /// never erases the only map back. Returns false when any entry could not be proved restored.
@@ -338,6 +349,17 @@ pub fn quarantine(
     switch: Option<&Switch>,
     at: &str,
     restore_command: &str,
+) -> Result<Quarantined, Refused> {
+    quarantine_with_probe(places, planned, switch, at, restore_command, None)
+}
+
+fn quarantine_with_probe(
+    places: &Places,
+    planned: &[Planned],
+    switch: Option<&Switch>,
+    at: &str,
+    restore_command: &str,
+    probe: Option<&dyn Fn(&Path)>,
 ) -> Result<Quarantined, Refused> {
     if !valid_stamp(at) || switch.is_some_and(|s| !s.valid()) {
         return Err(Refused::Failure(refused("invalid quarantine request")));
@@ -388,20 +410,44 @@ pub fn quarantine(
     if moves.is_empty() && switch.is_none() {
         return Ok(out);
     }
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         version: 1,
         at: at.to_owned(),
         restore: restore_command.to_owned(),
         moved: moves.iter().map(|(m, _)| m.clone()).collect(),
     };
     manifest_store.write(&encode(&manifest)?)?;
-    let undo = |done: &[(Moved, PathBuf)]| undo_moves(places, &manifest_store, &manifest, done);
-    for (index, (m, from)) in moves.iter().enumerate() {
-        let target = moved_path(places, &m.id);
+    let undo = |done: &[(Moved, PathBuf)], manifest: &Manifest| {
+        undo_moves(places, &manifest_store, manifest, done)
+    };
+    for index in 0..moves.len() {
+        let (kind, profile, id, from) = {
+            let (m, from) = &moves[index];
+            (m.kind, m.profile.clone(), m.id.clone(), from.clone())
+        };
+        let target = moved_path(places, &id);
+        if let Some(probe) = probe {
+            probe(&from);
+        }
         // Never over an existing file: a leftover from an earlier run stays and this run stops.
-        if std::fs::symlink_metadata(&target).is_ok() || std::fs::rename(from, &target).is_err() {
-            undo(&moves[..index]);
-            return Err(Refused::MoveFailed(m.kind, m.profile.clone()));
+        if std::fs::symlink_metadata(&target).is_ok() || std::fs::rename(&from, &target).is_err() {
+            undo(&moves[..index], &manifest);
+            return Err(Refused::MoveFailed(kind, profile));
+        }
+        let Some((size, file_digest)) = moved_facts(places, &id) else {
+            undo(&moves[..=index], &manifest);
+            return Err(Refused::MoveFailed(kind, profile));
+        };
+        {
+            let m = &mut moves[index].0;
+            m.size = size;
+            m.digest = file_digest;
+        }
+        manifest.moved = moves.iter().map(|(m, _)| m.clone()).collect();
+        let written = encode(&manifest).and_then(|bytes| manifest_store.write(&bytes));
+        if let Err(failure) = written {
+            undo(&moves[..=index], &manifest);
+            return Err(Refused::Failure(failure));
         }
         if let Some(parent) = from.parent() {
             sync_folder(parent);
@@ -412,7 +458,7 @@ pub fn quarantine(
         let written = registry::claim_as_agent(SWITCH_ROW, &places.ccs, None)
             .and_then(|store| encode(switch).and_then(|bytes| store.write(&bytes)));
         if let Err(failure) = written {
-            undo(&moves);
+            undo(&moves, &manifest);
             return Err(Refused::Failure(failure));
         }
         out.switched = true;
@@ -830,6 +876,31 @@ mod tests {
         assert!(!folder.exists(), "the empty quarantine folder is gone");
         // Restoring again is a no-op.
         assert_eq!(restore(&p).unwrap(), Restored::default());
+    }
+
+    #[test]
+    fn quarantine_records_the_file_that_was_actually_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path());
+        let codex = p.codex_copy("work").unwrap();
+        private_file(&codex, b"before-preflight");
+        let replacement = b"replacement-before-rename";
+        let probe = |path: &Path| private_file(path, replacement);
+        let plan = [Planned {
+            kind: Kind::CodexSaved,
+            profile: "work".into(),
+        }];
+
+        let done = quarantine_with_probe(&p, &plan, None, AT, "restore", Some(&probe)).unwrap();
+        assert_eq!(done.moved.len(), 1);
+        assert_eq!(done.moved[0].size, replacement.len() as u64);
+        assert_eq!(done.moved[0].digest, digest(replacement));
+        let recorded = read_manifest(&p.ccs).unwrap().unwrap();
+        assert_eq!(recorded.moved[0].size, replacement.len() as u64);
+        assert_eq!(recorded.moved[0].digest, digest(replacement));
+        let back = restore(&p).unwrap();
+        assert!(back.kept.is_empty(), "{back:?}");
+        assert_eq!(std::fs::read(&codex).unwrap(), replacement);
     }
 
     /// A newer sign-in made after the quarantine is never overwritten: the old copy stays in the

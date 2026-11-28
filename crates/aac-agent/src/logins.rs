@@ -15,6 +15,7 @@ use crate::proof;
 use aac_core::{Cause, Failure};
 use aac_files::credential::{self, CredentialFile, Kind, Record, Refusal, Summary, Written};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const REFUSED_ROTATING: &str = "rotating sign-ins are never delivered";
@@ -53,17 +54,37 @@ fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str, Failure> {
         .ok_or_else(|| refused("invalid login request"))
 }
 
-/// The computer's AAC private folder: `home/.ccs` (tests), else `CCS_HOME`, else `$HOME/.ccs`.
+fn environment_roots() -> BTreeMap<String, String> {
+    ["CCS_DIR", "CCS_HOME"]
+        .iter()
+        .filter_map(|key| {
+            std::env::var_os(key).and_then(|value| {
+                value
+                    .to_str()
+                    .map(|value| ((*key).to_owned(), value.to_owned()))
+            })
+        })
+        .collect()
+}
+
+/// The computer's AAC private folder: `home/.ccs` (tests), else the dashboard's root rule
+/// (`CCS_DIR`, legacy `CCS_HOME` plus `.ccs`, then the home's `.ccs`).
 fn root(args: &Value) -> Result<PathBuf, Failure> {
-    let root = if let Some(home) = args.get("home") {
-        PathBuf::from(home.as_str().ok_or_else(|| refused("invalid home"))?).join(".ccs")
-    } else if let Some(ccs) = std::env::var_os("CCS_HOME") {
-        PathBuf::from(ccs)
-    } else {
-        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .map(|home| PathBuf::from(home).join(".ccs"))
-            .ok_or_else(|| refused("no home folder"))?
-    };
+    if let Some(home) = args.get("home") {
+        let root =
+            PathBuf::from(home.as_str().ok_or_else(|| refused("invalid home"))?).join(".ccs");
+        if !root.is_absolute() {
+            return Err(refused("invalid home"));
+        }
+        return Ok(root);
+    }
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .ok_or_else(|| refused("no home folder"))?;
+    if !home.is_absolute() {
+        return Err(refused("invalid home"));
+    }
+    let root = aac_files::login_rollback::selected_ccs_root(&home, &environment_roots(), None)?;
     if !root.is_absolute() {
         return Err(refused("invalid home"));
     }
@@ -389,6 +410,89 @@ mod tests {
     fn ident(home: &tempfile::TempDir) -> Value {
         json!({"loginId":"0a1b2c3d","kind":"claude-token","provider":"claude",
             "account":"claude:test","home":home.path().to_str().unwrap(),"computer":key(home)})
+    }
+
+    #[test]
+    fn login_verbs_select_the_dashboard_root() {
+        const CHILD: &str = "AAC_L4_LOGIN_ROOT_CHILD";
+        const TEST_HOME: &str = "AAC_L4_LOGIN_ROOT_HOME";
+        if let Some(case) = std::env::var_os(CHILD) {
+            let home = PathBuf::from(std::env::var_os(TEST_HOME).unwrap());
+            let inventory_args = if case == "override" {
+                json!({"home": home.to_str().unwrap()})
+            } else {
+                json!({})
+            };
+            let inventory = run("login-inventory", &inventory_args).unwrap();
+            let computer = inventory["computer"]["key"].as_str().unwrap();
+            let mut put = json!({"loginId":"0a1b2c3d","kind":"claude-token","provider":"claude",
+                "account":"claude:test","secret":TOKEN,"expiresAt":"2027-11-27T00:00:00Z",
+                "expect":"absent","nowMs":1_795_000_000_000i64,"computer":computer});
+            if case == "override" {
+                put["home"] = json!(home.to_str().unwrap());
+            }
+            run("login-put", &put).unwrap();
+            return;
+        }
+
+        let exe = std::env::current_exe().unwrap();
+        for case in ["direct", "legacy", "override"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let legacy = dir.path().join("legacy");
+            let direct = dir.path().join("direct");
+            let mut command = std::process::Command::new(&exe);
+            command
+                .arg("logins::tests::login_verbs_select_the_dashboard_root")
+                .arg("--exact")
+                .env(CHILD, case)
+                .env(TEST_HOME, &home)
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env_remove("CCS_DIR")
+                .env_remove("CCS_HOME");
+            match case {
+                "direct" => {
+                    command.env("CCS_DIR", &direct).env("CCS_HOME", &legacy);
+                }
+                "legacy" => {
+                    command.env("CCS_HOME", &legacy);
+                }
+                _ => {
+                    command.env("CCS_DIR", &direct).env("CCS_HOME", &legacy);
+                }
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let login = |root: &std::path::Path| root.join("logins").join("claude-0a1b2c3d.json");
+            let home_login = login(&home.join(".ccs"));
+            let legacy_login = login(&legacy);
+            let legacy_ccs_login = login(&legacy.join(".ccs"));
+            let direct_login = login(&direct);
+            match case {
+                "direct" => {
+                    assert!(direct_login.exists(), "CCS_DIR is the AAC folder itself");
+                    assert!(!legacy_login.exists());
+                    assert!(!legacy_ccs_login.exists());
+                    assert!(!home_login.exists());
+                }
+                "legacy" => {
+                    assert!(legacy_ccs_login.exists(), "legacy CCS_HOME gains .ccs");
+                    assert!(!legacy_login.exists());
+                    assert!(!home_login.exists());
+                }
+                _ => {
+                    assert!(home_login.exists(), "the explicit home override still wins");
+                    assert!(!direct_login.exists());
+                    assert!(!legacy_login.exists());
+                    assert!(!legacy_ccs_login.exists());
+                }
+            }
+        }
     }
 
     /// Red/green: every rotating kind is refused by its type, before any file is touched.
