@@ -1260,6 +1260,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_owners/recheck.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/owner_host.rs",
       "kind": "safety",
       "evidence": [
@@ -2991,6 +2998,12 @@
       "evidence": [
         "HTTP"
       ]
+    },
+    {
+      "file": "web-dashboard/leptos/src/accounts/model.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "web-dashboard/leptos/src/accounts/provider.rs",
