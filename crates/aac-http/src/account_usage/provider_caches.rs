@@ -13,7 +13,6 @@ fn one_link(file: &std::path::Path) -> bool {
     aac_files::link_count(file) == Some(1)
 }
 
-pub(crate) const WALLET_ACCOUNT: &str = "opencode-wallet-account";
 pub(crate) const CURSOR_QUOTA: &str = "cursor-quota-observation";
 pub(crate) const CURSOR_ACCOUNT_FILE: &str = "cursor-account-v1.json";
 pub(crate) const CURSOR_QUOTA_FILE: &str = "cursor-quota-v1.json";
@@ -79,54 +78,6 @@ pub fn claude_snapshot(
         .filter(|v| v["schemaVersion"] == 1 && v["manifestHash"] == manifest)
         .and_then(|mut v| v.get_mut("sample").map(Value::take))
         .filter(|v| !v.is_null()))
-}
-
-/// Read an OpenCode console wallet account pointer bound to the source fingerprint.
-pub fn wallet_account(root: &Path, binding_hash: &str) -> Result<Option<String>, Decline> {
-    if !hex(binding_hash, 64) {
-        return Err(Decline::Shape);
-    }
-    let Some(value) = load(root, WALLET_ACCOUNT, None, true)? else {
-        return Ok(None);
-    };
-    Ok(wallet_pointer(binding_hash, &value).map(str::to_owned))
-}
-
-pub(crate) fn wallet_pointer<'a>(binding_hash: &str, value: &'a Value) -> Option<&'a str> {
-    if !hex(binding_hash, 64)
-        || value.as_object().is_none_or(|o| o.len() != 3)
-        || value["version"] != 1
-        || value["binding"] != binding_hash
-    {
-        return None;
-    }
-    value["accountId"].as_str().filter(|s| {
-        s.strip_prefix("plan-opencode-go-console-mac-")
-            .is_some_and(|tail| hex(tail, 12))
-    })
-}
-
-/// Read the opt-in wallet binding with a configured safe Mac selector.
-pub fn wallet_source(root: &Path) -> Result<Option<Value>, Decline> {
-    let Some(value) = load(root, "opencode-wallet-source", None, true)? else {
-        return Ok(None);
-    };
-    let alias = value["sshHost"].as_str().filter(|alias| {
-        !alias.is_empty()
-            && alias.len() <= 128
-            && alias.as_bytes()[0].is_ascii_alphanumeric()
-            && alias
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-    });
-    if value.as_object().is_none_or(|o| o.len() != 3)
-        || value["version"] != 1
-        || value["platform"] != "mac"
-    {
-        return Err(Decline::Shape);
-    }
-    let alias = alias.ok_or(Decline::Shape)?;
-    Ok(Some(json!({"version":1,"platform":"mac","sshHost":alias})))
 }
 
 fn muse_identity(value: &Value, kinds: &[&str]) -> bool {
@@ -337,17 +288,6 @@ pub(crate) fn answer(root: &Path, bytes: &[u8]) -> Result<Value, Decline> {
         profile_id: String,
         manifest_hash: String,
     }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct Wallet {
-        binding_hash: String,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct Source {
-        wallet_source: bool,
-    }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -358,20 +298,12 @@ pub(crate) fn answer(root: &Path, bytes: &[u8]) -> Result<Value, Decline> {
         return Ok(json!({"value": cursor_quota(root, &request.cursor_fingerprint)?}));
     }
 
-    let result =
-        if let Ok(request) = crate::json_object::from_slice::<Source>(bytes, &["walletSource"]) {
-            if !request.wallet_source {
-                return Err(Decline::Shape);
-            }
-            wallet_source(root)?.map(|value| Value::String(value.to_string()))
-        } else if let Ok(request) =
-            crate::json_object::from_slice::<Claude>(bytes, &["profileId", "manifestHash"])
-        {
-            claude_snapshot(root, &request.profile_id, &request.manifest_hash)?
-        } else {
-            let request: Wallet = crate::json_object::from_slice(bytes, &["bindingHash"])
-                .map_err(|_| Decline::Shape)?;
-            wallet_account(root, &request.binding_hash)?.map(Value::String)
-        };
+    let result = if let Ok(request) =
+        crate::json_object::from_slice::<Claude>(bytes, &["profileId", "manifestHash"])
+    {
+        claude_snapshot(root, &request.profile_id, &request.manifest_hash)?
+    } else {
+        return Err(Decline::Shape);
+    };
     Ok(json!({"value": result}))
 }

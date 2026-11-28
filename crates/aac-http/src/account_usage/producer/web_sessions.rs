@@ -22,20 +22,25 @@ struct SurfaceCache {
 }
 
 /// Shared per-surface cache, refresh budget, and 429 cooldown state held by [`super::Producer`].
+/// One OpenCode wallet session per account, so wallet entries are keyed by
+/// `(surface, account)`; Qwen and Muse keep one global entry each.
 #[derive(Default)]
 pub(crate) struct WebSessionState {
-    entries: Mutex<HashMap<Surface, SurfaceCache>>,
+    entries: Mutex<HashMap<(Surface, Option<String>), SurfaceCache>>,
     endpoint: Mutex<Option<String>>,
 }
 
+type CacheKey = (Surface, Option<String>);
+
 impl WebSessionState {
     /// Clear cached state and cooldown for one surface (called after PUT or DELETE).
-    pub(crate) fn clear(&self, surface: Surface) {
+    /// `account` is `Some` for one OpenCode Go account's wallet, `None` otherwise.
+    pub(crate) fn clear(&self, surface: Surface, account: Option<&str>) {
         let mut guard = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.remove(&surface);
+        guard.remove(&(surface, account.map(str::to_owned)));
     }
 
     /// Override the upstream HTTPS target with a loopback fixture URL (tests only).
@@ -55,12 +60,13 @@ impl WebSessionState {
             .clone()
     }
 
-    fn snapshot(&self, surface: Surface, fingerprint: &str) -> SurfaceCache {
+    fn snapshot(&self, surface: Surface, account: Option<&str>, fingerprint: &str) -> SurfaceCache {
         let guard = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match guard.get(&surface) {
+        let key: CacheKey = (surface, account.map(str::to_owned));
+        match guard.get(&key) {
             Some(entry) if entry.fingerprint == fingerprint => entry.clone(),
             _ => SurfaceCache {
                 fingerprint: fingerprint.to_owned(),
@@ -69,13 +75,21 @@ impl WebSessionState {
         }
     }
 
-    fn record_ok(&self, surface: Surface, fingerprint: &str, now_ms: i64, row: Value) {
+    fn record_ok(
+        &self,
+        surface: Surface,
+        account: Option<&str>,
+        fingerprint: &str,
+        now_ms: i64,
+        row: Value,
+    ) {
         let mut guard = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key: CacheKey = (surface, account.map(str::to_owned));
         guard.insert(
-            surface,
+            key,
             SurfaceCache {
                 fingerprint: fingerprint.to_owned(),
                 checked_at_ms: now_ms,
@@ -85,12 +99,19 @@ impl WebSessionState {
         );
     }
 
-    fn record_cooldown(&self, surface: Surface, fingerprint: &str, until_ms: i64) {
+    fn record_cooldown(
+        &self,
+        surface: Surface,
+        account: Option<&str>,
+        fingerprint: &str,
+        until_ms: i64,
+    ) {
         let mut guard = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = guard.entry(surface).or_default();
+        let key: CacheKey = (surface, account.map(str::to_owned));
+        let entry = guard.entry(key).or_default();
         if entry.fingerprint != fingerprint {
             *entry = SurfaceCache {
                 fingerprint: fingerprint.to_owned(),
@@ -149,7 +170,7 @@ pub(super) async fn collect_qwen(
         }
     };
     let fp = stored.meta.fingerprint.clone();
-    let cached = state.snapshot(Surface::Qwen, &fp);
+    let cached = state.snapshot(Surface::Qwen, None, &fp);
 
     if !force && now_ms < cached.cooldown_until_ms {
         if let Some(prev) = cached.last_good {
@@ -197,7 +218,7 @@ pub(super) async fn collect_qwen(
         Ok(reading) => {
             let mut row = qwen::to_account_row(&reading, platform, "Pasted Qwen console session");
             row = apply_source_identity(row, source);
-            state.record_ok(Surface::Qwen, &fp, now_ms, row.clone());
+            state.record_ok(Surface::Qwen, None, &fp, now_ms, row.clone());
             Some(row)
         }
         Err(QwenError::NeedsSignIn(message)) => Some(match cached.last_good {
@@ -212,7 +233,7 @@ pub(super) async fn collect_qwen(
             message,
         }) => {
             let until = now_ms.saturating_add((retry_after_seconds * 1000.0) as i64);
-            state.record_cooldown(Surface::Qwen, &fp, until);
+            state.record_cooldown(Surface::Qwen, None, &fp, until);
             Some(match cached.last_good {
                 Some(prev) => apply_source_identity(
                     with_cached_status(prev, "cached", &now_iso, &message),
@@ -269,176 +290,135 @@ fn qwen_error_row(
     })
 }
 
-/// Collect OpenCode Zen console wallet usage in-process from the pasted web session in `root`.
-/// Missing or unreadable sessions report `needs_sign_in`; no legacy bridge is consulted.
-pub(super) async fn collect_opencode_wallet(
+/// Collect one OpenCode Go account's Zen prepaid wallet balance window, or `None`.
+///
+/// There is no standalone wallet row: the window rides inside the account's own
+/// card as a `balance` line. An account without a pasted console session gets no
+/// line (never an invented `$0`); a stale or failed read with a cached balance
+/// shows the cached window, and a session whose workspace cannot be matched to
+/// the account shows nothing and logs a plain reason.
+pub(super) async fn collect_wallet_window(
     root: &Path,
     state: &WebSessionState,
+    source: &Source,
     now_ms: i64,
     force: bool,
 ) -> Option<Value> {
-    let now_iso = iso_seconds(now_ms);
-    let platform = host_platform();
+    let account = source.id.as_str();
     let root_buf = root.to_path_buf();
+    let account_buf = account.to_owned();
     let stored = match tokio::task::spawn_blocking(move || {
-        web_session::load(&root_buf, Surface::OpencodeWallet)
+        web_session::load_for_account(&root_buf, Surface::OpencodeWallet, &account_buf)
     })
     .await
     {
         Ok(Ok(Some(stored))) => stored,
-        _ => {
-            return Some(opencode_error_row(
-                "plan-opencode-go-console-web-000000000000",
-                platform,
-                "needs_sign_in",
-                "Paste an OpenCode console session to refresh the wallet.",
-                &now_iso,
-            ));
-        }
+        _ => return None,
+    };
+    let workspace = stored.meta.workspace_id.clone();
+    let Some(workspace) = workspace else {
+        tracing::warn!(
+            account,
+            "OpenCode wallet session names no workspace; showing no wallet line",
+        );
+        return None;
     };
     let cookies = stored.secret.cookies()?.to_vec();
-    let workspace = stored.meta.workspace_id.clone();
     let fp = stored.meta.fingerprint.clone();
-    let cached = state.snapshot(Surface::OpencodeWallet, &fp);
-    let fallback_id = workspace
-        .as_deref()
-        .map(opencode::wallet_account_id)
-        .unwrap_or_else(|| {
-            let suffix = &fp.strip_prefix("sha256:").unwrap_or(&fp);
-            let short = suffix.get(..12).unwrap_or("000000000000");
-            format!("plan-opencode-go-console-web-{short}")
-        });
+    let cached = state.snapshot(Surface::OpencodeWallet, Some(account), &fp);
+
+    let missing = |reason: &str| -> Option<Value> {
+        tracing::warn!(account, reason);
+        None
+    };
 
     if !force && now_ms < cached.cooldown_until_ms {
-        return Some(match cached.last_good {
-            Some(prev) => with_cached_status(
-                prev,
-                "cached",
-                &now_iso,
-                "OpenCode console rate limited the check; showing the last cached reading.",
-            ),
-            None => opencode_error_row(
-                &fallback_id,
-                platform,
-                "error",
-                "OpenCode console rate limited the check; try again later.",
-                &now_iso,
-            ),
-        });
+        return cached
+            .last_good
+            .as_ref()
+            .and_then(|window| wallet_window(window.clone(), true));
     }
 
     let Some(transport) = build_transport(state) else {
-        return Some(match cached.last_good {
-            Some(prev) => with_cached_status(
-                prev,
-                "cached",
-                &now_iso,
-                "HTTP client unavailable; showing the last cached wallet reading.",
-            ),
-            None => opencode_error_row(
-                &fallback_id,
-                platform,
-                "error",
-                "HTTP client unavailable for OpenCode wallet check.",
-                &now_iso,
-            ),
-        });
+        return cached
+            .last_good
+            .as_ref()
+            .and_then(|window| wallet_window(window.clone(), true))
+            .or_else(|| missing("OpenCode console wallet check has no HTTP client"));
     };
 
-    match opencode::collect(&transport, &cookies, workspace.as_deref(), now_ms).await {
+    match opencode::collect(&transport, &cookies, Some(&workspace), now_ms).await {
         Ok(reading) => {
-            let row = opencode::to_account_row(&reading, platform);
-            state.record_ok(Surface::OpencodeWallet, &fp, now_ms, row.clone());
-            Some(row)
+            let Some(window) = reading
+                .windows
+                .iter()
+                .find(|w| w["key"] == "zen-balance")
+                .cloned()
+            else {
+                return missing("OpenCode console reading carries no wallet balance");
+            };
+            let mut stored_window = window;
+            stored_window["label"] = json!("Wallet");
+            stored_window["sampledAt"] = json!(reading.sampled_at);
+            state.record_ok(
+                Surface::OpencodeWallet,
+                Some(account),
+                &fp,
+                now_ms,
+                stored_window.clone(),
+            );
+            wallet_window(stored_window, false)
         }
-        Err(OpenCodeError::NeedsSignIn) => {
-            let msg = "The pasted OpenCode console session has expired. Paste a fresh session.";
-            Some(match cached.last_good {
-                Some(prev) => with_cached_status(prev, "needs_sign_in", &now_iso, msg),
-                None => opencode_error_row(&fallback_id, platform, "needs_sign_in", msg, &now_iso),
-            })
-        }
+        Err(OpenCodeError::NeedsSignIn) => cached
+            .last_good
+            .as_ref()
+            .and_then(|window| wallet_window(window.clone(), true))
+            .or_else(|| {
+                missing("The pasted OpenCode console session has expired; showing no wallet line")
+            }),
         Err(OpenCodeError::RateLimited {
             retry_after_seconds,
         }) => {
             let secs = retry_after_seconds.unwrap_or(60.0).clamp(30.0, 86_400.0);
             state.record_cooldown(
                 Surface::OpencodeWallet,
+                Some(account),
                 &fp,
                 now_ms.saturating_add((secs * 1000.0) as i64),
             );
-            let msg = "OpenCode console rate limited the check; showing the last cached reading.";
-            Some(match cached.last_good {
-                Some(prev) => with_cached_status(prev, "cached", &now_iso, msg),
-                None => opencode_error_row(
-                    &fallback_id,
-                    platform,
-                    "error",
-                    "OpenCode console rate limited the check; try again later.",
-                    &now_iso,
-                ),
-            })
+            cached
+                .last_good
+                .as_ref()
+                .and_then(|window| wallet_window(window.clone(), true))
+                .or_else(|| missing("OpenCode console rate limited the wallet check"))
         }
-        Err(OpenCodeError::WorkspaceMismatch | OpenCodeError::ChooseWorkspace(_)) => {
-            let msg = "The saved OpenCode workspace is no longer valid for this session. Paste a fresh session.";
-            Some(match cached.last_good {
-                Some(prev) => with_cached_status(prev, "needs_sign_in", &now_iso, msg),
-                None => opencode_error_row(&fallback_id, platform, "needs_sign_in", msg, &now_iso),
-            })
-        }
+        Err(OpenCodeError::WorkspaceMismatch | OpenCodeError::ChooseWorkspace(_)) => missing(
+            "The saved OpenCode workspace no longer matches this account; showing no wallet line",
+        ),
         Err(OpenCodeError::WalletNotPrepaid) => {
-            let msg = "The selected OpenCode workspace is not a prepaid Zen wallet.";
-            Some(match cached.last_good {
-                Some(prev) => with_cached_status(prev, "cached", &now_iso, msg),
-                None => opencode_error_row(&fallback_id, platform, "unavailable", msg, &now_iso),
-            })
+            missing("The saved OpenCode workspace is not a prepaid Zen wallet")
         }
         Err(
             OpenCodeError::InvalidResponse
             | OpenCodeError::ProviderError
             | OpenCodeError::NetworkError,
-        ) => Some(match cached.last_good {
-            Some(prev) => with_cached_status(
-                prev,
-                "cached",
-                &now_iso,
-                "Showing the last cached wallet reading; live check failed.",
-            ),
-            None => opencode_error_row(
-                &fallback_id,
-                platform,
-                "error",
-                "OpenCode console wallet could not be read.",
-                &now_iso,
-            ),
-        }),
+        ) => cached
+            .last_good
+            .as_ref()
+            .and_then(|window| wallet_window(window.clone(), true))
+            .or_else(|| missing("The OpenCode console wallet could not be read")),
     }
 }
 
-fn opencode_error_row(
-    account_id: &str,
-    platform: &str,
-    status: &str,
-    message: &str,
-    fetched_at: &str,
-) -> Value {
-    json!({
-        "id": account_id,
-        "provider": "opencode-go",
-        "providerLabel": "OpenCode Go",
-        "label": "OpenCode console wallet",
-        "email": null,
-        "plan": null,
-        "platform": platform,
-        "source": "Pasted OpenCode console session",
-        "status": status,
-        "message": aac_core::scrub(message),
-        "fetchedAt": fetched_at,
-        "sampledAt": null,
-        "isActive": false,
-        "windows": [],
-        "capabilities": rows::capabilities(),
-    })
+/// One normalized `Wallet` balance window for an OpenCode Go account card.
+/// A stale replay keeps its measured balance with the cached state and its
+/// original sample stamp.
+fn wallet_window(window: Value, stale: bool) -> Option<Value> {
+    let mut window = window;
+    if stale {
+        window["status"] = json!("cached");
+    }
+    rows::windows(&json!([window]), 1).pop()
 }
 
 /// Collect Muse Code portal quota in-process from the pasted web session in `root`.
@@ -474,7 +454,7 @@ pub(super) async fn collect_muse(
     };
     let cookies = stored.secret.cookies()?.to_vec();
     let fp = stored.meta.fingerprint.clone();
-    let cached = state.snapshot(Surface::Muse, &fp);
+    let cached = state.snapshot(Surface::Muse, None, &fp);
 
     if !force && now_ms < cached.cooldown_until_ms {
         return Some(match cached.last_good {
@@ -548,7 +528,7 @@ pub(super) async fn collect_muse(
         Ok(reading) => {
             let mut row = muse::to_account_row(&reading, platform);
             row = apply_source_identity(row, source);
-            state.record_ok(Surface::Muse, &fp, now_ms, row.clone());
+            state.record_ok(Surface::Muse, None, &fp, now_ms, row.clone());
             Some(row)
         }
         Err(MuseError::NeedsSignIn) => {
@@ -598,6 +578,7 @@ pub(super) async fn collect_muse(
         }) => {
             state.record_cooldown(
                 Surface::Muse,
+                None,
                 &fp,
                 now_ms.saturating_add((retry_after_seconds * 1000.0) as i64),
             );
@@ -806,40 +787,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opencode_wallet_pasted_session_collects_and_retains_balance_on_expiry() {
+    async fn opencode_wallet_window_is_per_account_and_retains_balance_on_expiry() {
         let dir = tempfile::tempdir().unwrap();
-        let mut parsed = parse_pasted(
-            Surface::OpencodeWallet,
-            "auth=fixture-auth-val",
-            &PasteOptions {
-                workspace_id: Some("wrk_fixture123".into()),
-                ..Default::default()
-            },
-            "2026-11-26T12:00:00Z",
-        )
-        .unwrap();
-        parsed.meta.workspace_id = Some("wrk_fixture123".into());
-        save_as_agent(dir.path(), Surface::OpencodeWallet, &parsed).unwrap();
+        let save_session = |dir: &Path, cookie: &str, account: &str| -> String {
+            let mut parsed = parse_pasted(
+                Surface::OpencodeWallet,
+                cookie,
+                &PasteOptions {
+                    workspace_id: Some("wrk_fixture123".into()),
+                    ..Default::default()
+                },
+                "2026-11-26T12:00:00Z",
+            )
+            .unwrap();
+            parsed.meta.workspace_id = Some("wrk_fixture123".into());
+            parsed.meta.account_id = Some(account.to_owned());
+            save_as_agent(dir, Surface::OpencodeWallet, &parsed).unwrap();
+            account.to_owned()
+        };
+        let account_a = save_session(dir.path(), "auth=fixture-auth-a", "opencode-go:usage");
+        let source_a = |id: &str| Source {
+            id: id.to_owned(),
+            provider: "opencode-go".to_owned(),
+            platform: "ubuntu".to_owned(),
+            ssh_host: None,
+            label: None,
+            credential: Credential::Discover,
+            created_at: None,
+            created_by: None,
+        };
 
-        let expired_flag = Arc::new(AtomicUsize::new(0));
-        let flag_clone = expired_flag.clone();
+        // 0: $12.50. 1: $3.25. 2: $0. 3: another workspace. 4: session expired.
+        let mode = Arc::new(AtomicUsize::new(0));
+        let mode_clone = mode.clone();
         let (endpoint, server) = spawn_fixture(move |url, _| {
-            if flag_clone.load(Ordering::SeqCst) == 1 {
+            let m = mode_clone.load(Ordering::SeqCst);
+            if m == 4 {
                 return (401, vec![], String::new());
             }
             if url.ends_with("/orgs") {
-                return (
-                    200,
-                    vec![("content-type", "application/json")],
-                    r#"[{"id":"wrk_fixture123","name":"Main"}]"#.into(),
-                );
+                let orgs = if m == 3 {
+                    r#"[{"id":"wrk_zzzz999","name":"Other"}]"#
+                } else {
+                    r#"[{"id":"wrk_fixture123","name":"Main"}]"#
+                };
+                return (200, vec![("content-type", "application/json")], orgs.into());
             }
             if url.ends_with("/billing/status") {
-                return (
-                    200,
-                    vec![("content-type", "application/json")],
-                    r#"{"mode":"pay-as-you-go","billingMode":"prepaid","balanceMicroCents":"1250000000"}"#.into(),
+                let balance = match m {
+                    1 => "325000000",
+                    2 => "0",
+                    _ => "1250000000",
+                };
+                let body = format!(
+                    r#"{{"mode":"pay-as-you-go","billingMode":"prepaid","balanceMicroCents":"{balance}"}}"#
                 );
+                return (200, vec![("content-type", "application/json")], body);
             }
             (200, vec![("content-type", "application/json")], "{}".into())
         })
@@ -849,20 +852,82 @@ mod tests {
         state.set_endpoint(Some(endpoint));
         let t0 = 1_795_608_000_000_i64;
 
-        let ok = collect_opencode_wallet(dir.path(), &state, t0, false)
+        // No session for this account: no line, no invented zero.
+        assert!(
+            collect_wallet_window(
+                dir.path(),
+                &state,
+                &source_a("opencode-go:acct:52f3251b"),
+                t0,
+                false
+            )
             .await
-            .unwrap();
-        assert_eq!(ok["status"], "ok");
-        assert_eq!(ok["id"], opencode::wallet_account_id("wrk_fixture123"));
-        assert_eq!(ok["windows"][0]["remaining"], 12.5);
+            .is_none()
+        );
 
-        expired_flag.store(1, Ordering::SeqCst);
-        let expired = collect_opencode_wallet(dir.path(), &state, t0 + 60_000, true)
+        let window = collect_wallet_window(dir.path(), &state, &source_a(&account_a), t0, false)
             .await
             .unwrap();
-        assert_eq!(expired["status"], "needs_sign_in");
-        assert_eq!(expired["windows"][0]["remaining"], 12.5);
-        assert!(expired["sampledAt"].is_string());
+        assert_eq!(window["key"], "zen-balance");
+        assert_eq!(window["label"], "Wallet");
+        assert_eq!(window["kind"], "balance");
+        assert_eq!(window["remaining"], 12.5);
+        assert_eq!(window["unit"], "USD");
+
+        // A second account's own session reads its own balance, independently.
+        let account_b = save_session(
+            dir.path(),
+            "auth=fixture-auth-b",
+            "opencode-go:acct:52f3251b",
+        );
+        mode.store(1, Ordering::SeqCst);
+        let window_b = collect_wallet_window(dir.path(), &state, &source_a(&account_b), t0, false)
+            .await
+            .unwrap();
+        assert_eq!(window_b["remaining"], 3.25);
+
+        // A read zero is a real reading, shown as-is.
+        mode.store(2, Ordering::SeqCst);
+        let zero =
+            collect_wallet_window(dir.path(), &state, &source_a(&account_a), t0 + 30_000, true)
+                .await
+                .unwrap();
+        assert_eq!(zero["remaining"], 0.0);
+
+        // A session whose workspace the console no longer returns is not matched
+        // to the account, even with a cached balance: no line, no guess.
+        mode.store(3, Ordering::SeqCst);
+        assert!(
+            collect_wallet_window(dir.path(), &state, &source_a(&account_a), t0 + 60_000, true)
+                .await
+                .is_none()
+        );
+
+        // Expired session with a cached balance: the stale window, honestly marked.
+        mode.store(0, Ordering::SeqCst);
+        let fresh = collect_wallet_window(
+            dir.path(),
+            &state,
+            &source_a(&account_a),
+            t0 + 120_000,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fresh["remaining"], 12.5);
+        mode.store(4, Ordering::SeqCst);
+        let stale = collect_wallet_window(
+            dir.path(),
+            &state,
+            &source_a(&account_a),
+            t0 + 180_000,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stale["status"], "cached");
+        assert_eq!(stale["remaining"], 12.5);
+        assert!(stale["sampledAt"].is_string());
 
         server.abort();
     }
@@ -956,11 +1021,13 @@ mod tests {
         assert_eq!(qwen["status"], "needs_sign_in");
         assert_eq!(qwen["windows"], json!([]));
 
-        let wallet = collect_opencode_wallet(dir.path(), &state, now, false)
-            .await
-            .expect("OpenCode wallet must not fall back to the retired bridge");
-        assert_eq!(wallet["status"], "needs_sign_in");
-        assert_eq!(wallet["windows"], json!([]));
+        // Without a pasted console session, an OpenCode Go account carries no
+        // wallet line at all (and never a standalone row).
+        assert!(
+            collect_wallet_window(dir.path(), &state, &dummy_source("opencode-go"), now, false)
+                .await
+                .is_none()
+        );
 
         let muse = collect_muse(dir.path(), None, &state, &dummy_source("muse"), now, false)
             .await

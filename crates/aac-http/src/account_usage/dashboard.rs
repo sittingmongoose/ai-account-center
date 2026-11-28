@@ -94,9 +94,6 @@ fn provider(
         Muse => {
             json!({"kind":"browser-extension","platform":"mac","label":"Quota sync by browser extension"})
         }
-        OpencodeGo => {
-            json!({"kind":"browser-extension","platform":"mac","label":"Console wallet by browser extension"})
-        }
         _ => Value::Null,
     };
     let open = match row.id {

@@ -383,7 +383,6 @@ mod tests {
         assert_eq!(
             moved,
             [
-                ("opencode-wallet-account", "collection"),
                 ("cursor-account-observation", "collection"),
                 ("cursor-quota-observation", "collection"),
                 ("account-usage-cooldown", "collection"),
@@ -419,7 +418,13 @@ mod tests {
             .filter(|row| row.moves_with.as_deref() == Some("lifecycle"))
             .map(|row| row.id.as_str())
             .collect();
-        assert_eq!(lifecycle, ["opencode-wallet-source"]);
+        assert!(
+            rows()
+                .unwrap()
+                .iter()
+                .all(|row| !row.id.contains("opencode-wallet")),
+            "no console wallet file rows: {lifecycle:?}"
+        );
         for row in rows().unwrap() {
             if let Some(group) = &row.moves_with {
                 assert!(groups.contains(group.as_str()), "{}", row.id);

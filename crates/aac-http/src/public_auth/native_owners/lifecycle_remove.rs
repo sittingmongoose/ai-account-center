@@ -3,12 +3,12 @@ use super::{
     NativeOwners, lifecycle_antigravity as antigravity,
     lifecycle_codex::{self as codex, RemoveError},
     lifecycle_keys::{KeyStore, key_binding, key_id},
-    lifecycle_label::{claim_registry, claim_registry_async, save_registry},
+    lifecycle_label::{claim_registry_async, save_registry},
 };
 use crate::{
     account_reads::public_account_id,
     account_usage::{
-        producer, provider_caches,
+        producer,
         sources::{self, Credential, Source},
     },
     key_lifecycle::{self, Effect, Workflow},
@@ -16,7 +16,6 @@ use crate::{
         self, DashboardAccess, Method, Reply, Request, error, lifecycle, response, storage,
     },
 };
-use aac_files::{read, registry};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
@@ -130,12 +129,6 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
         .await;
     }
     let root = native.agents.root().to_owned();
-    if id.starts_with("plan-opencode-go-console-web-") {
-        return web_wallet(native, &id, &session, offered).await;
-    }
-    if id.starts_with("plan-opencode-go-console-") {
-        return wallet(native, &id, &session, offered).await;
-    }
     if let Some(profile) = id
         .strip_prefix("codex:")
         .map(SavedProfile::Codex)
@@ -304,166 +297,6 @@ fn removed_reply() -> Reply {
     ))
 }
 
-async fn web_wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&str>) -> Reply {
-    if running(native, id) {
-        return Refusal::Running.reply();
-    }
-    let owner = native.clone();
-    let target = id.to_owned();
-    let session = session.to_owned();
-    let token = token.map(str::to_owned);
-    match tokio::task::spawn_blocking(move || {
-        let native = owner;
-        let id = target;
-        let root = native.agents.root();
-        let absent = if token.is_some() {
-            Refusal::Stale
-        } else {
-            Refusal::Missing
-        };
-        let stored =
-            aac_files::web_session::load(root, aac_files::web_session::Surface::OpencodeWallet)
-                .map_err(|_| Refusal::Failed)?
-                .ok_or(absent)?;
-        let expected_id = stored
-            .meta
-            .workspace_id
-            .as_deref()
-            .map(aac_agent::web_session::opencode::wallet_account_id);
-        if expected_id.as_deref() != Some(id.as_str()) {
-            return Err(absent);
-        }
-        let fingerprint = storage::sha(
-            &json!([id, stored.meta.fingerprint, stored.meta.workspace_id]).to_string(),
-        );
-        if let Some(reply) = approve(
-            &native,
-            Review {
-                subject: &id,
-                session: &session,
-                fingerprint: &fingerprint,
-                token: token.as_deref(),
-                effects: &[
-                    "The pasted OpenCode console session is deleted from the dashboard computer.",
-                    "Its sign-in in the browser is not changed.",
-                ],
-            },
-        ) {
-            return Ok(reply);
-        }
-        if running(&native, &id) {
-            return Err(Refusal::Running);
-        }
-        aac_files::web_session::delete_with_owners(
-            &native.owners,
-            root,
-            aac_files::web_session::Surface::OpencodeWallet,
-        )
-        .map_err(|_| Refusal::Failed)?;
-        if let Some(usage) = &native.usage {
-            usage
-                .producer
-                .clear_web_session_cache(aac_files::web_session::Surface::OpencodeWallet);
-        }
-        native.changed();
-        Ok(removed_reply())
-    })
-    .await
-    {
-        Ok(Ok(reply)) => reply,
-        Ok(Err(refusal)) => refusal.reply(),
-        Err(_) => Refusal::Failed.reply(),
-    }
-}
-
-async fn wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&str>) -> Reply {
-    if running(native, id) {
-        return Refusal::Running.reply();
-    }
-    let owner = native.clone();
-    let target = id.to_owned();
-    let session = session.to_owned();
-    let token = token.map(str::to_owned);
-    match tokio::task::spawn_blocking(move || {
-        let native = owner;
-        let id = target;
-        let root = native.agents.root();
-        let (writer, mut entries) =
-            claim_registry(root, &native.owners).map_err(|_| Refusal::Failed)?;
-        let rows = registry::rows().map_err(|_| Refusal::Failed)?;
-        let source = native
-            .owners
-            .claim(rows, "opencode-wallet-source", root, None)
-            .map_err(|_| Refusal::Failed)?;
-        let position = entries.iter().position(|entry| entry.id == id);
-        let entry = position.and_then(|i| entries.get(i));
-        let absent = if token.is_some() {
-            Refusal::Stale
-        } else {
-            Refusal::Missing
-        };
-        let _pointer = native
-            .owners
-            .claim(rows, provider_caches::WALLET_ACCOUNT, root, None)
-            .map_err(|_| Refusal::Failed)?;
-        let binding = provider_caches::wallet_source(root)
-            .map_err(|_| Refusal::Failed)?
-            .ok_or(absent)?;
-        let binding_hash = aac_core::sha256_hex(aac_views::js_json::write(&binding));
-        let account = provider_caches::wallet_account(root, &binding_hash)
-            .map_err(|_| Refusal::Failed)?
-            .filter(|account| *account == id)
-            .ok_or(absent)?;
-        let policy = read::ReadPolicy::capped(4096)
-            .owner(read::Owner::Mine)
-            .mode(read::Mode::Private)
-            .ancestors(read::Ancestors::NoLinkBelow(root));
-        let read::Read::Bytes(source_bytes, _) = read::read(source.path(), &policy) else {
-            return Err(Refusal::Failed);
-        };
-        let source_version = aac_core::sha256_hex(source_bytes);
-        let fingerprint =
-            storage::sha(&json!([account, binding_hash, source_version, entry]).to_string());
-        if let Some(reply) = approve(
-            &native,
-            Review {
-                subject: &id,
-                session: &session,
-                fingerprint: &fingerprint,
-                token: token.as_deref(),
-                effects: &[
-                    "The console wallet is no longer read by the dashboard.",
-                    "Its sign-in in the browser is not changed.",
-                ],
-            },
-        ) {
-            return Ok(reply);
-        }
-        if running(&native, &id) {
-            return Err(Refusal::Running);
-        }
-        let removed = position.map(|i| entries.remove(i));
-        if removed.is_some() {
-            save_registry(&writer, &entries).map_err(|_| Refusal::Failed)?;
-        }
-        if source.remove_settings().is_err() {
-            if let (Some(i), Some(entry)) = (position, removed) {
-                entries.insert(i, entry);
-                let _ = save_registry(&writer, &entries);
-            }
-            return Err(Refusal::Failed);
-        }
-        native.changed();
-        Ok(removed_reply())
-    })
-    .await
-    {
-        Ok(Ok(reply)) => reply,
-        Ok(Err(refusal)) => refusal.reply(),
-        Err(_) => Refusal::Failed.reply(),
-    }
-}
-
 struct Review<'a> {
     subject: &'a str,
     session: &'a str,
@@ -550,6 +383,23 @@ async fn remove(native: &NativeOwners, source: &Source) -> Result<(), Refusal> {
     let key = key_id(source);
     if key.is_some() && !KeyStore::configured(source) {
         return Err(Refusal::Failed);
+    }
+    // A removed account takes its pasted console session with it. Discover entries
+    // keep the pinned rows' sessions: those belong to rows that still exist.
+    if source.provider == "opencode-go" && key.is_some() {
+        aac_files::web_session::delete_for_account_with_owners(
+            &native.owners,
+            native.agents.root(),
+            aac_files::web_session::Surface::OpencodeWallet,
+            &source.id,
+        )
+        .map_err(|_| Refusal::Failed)?;
+        if let Some(usage) = &native.usage {
+            usage.producer.clear_web_session_cache(
+                aac_files::web_session::Surface::OpencodeWallet,
+                Some(source.id.as_str()),
+            );
+        }
     }
     let store = KeyStore { native, source };
     let root = native.agents.root();

@@ -133,9 +133,14 @@ async fn handle_put(
     };
     let mut opts = PasteOptions::default();
     let mut gateway_cookie: Option<String> = None;
+    let mut wallet_account: Option<String> = None;
     for (key, value) in &body {
         match (surface, key.as_str()) {
             (_, "cookie") => {}
+            (Surface::OpencodeWallet, "accountId") => match value {
+                Value::String(s) => wallet_account = Some(s.clone()),
+                _ => return super::no_store(lifecycle::invalid_action_body()),
+            },
             (Surface::Qwen, "gatewayCookie") => match value {
                 Value::Null => {}
                 Value::String(s) => gateway_cookie = Some(s.clone()),
@@ -185,6 +190,16 @@ async fn handle_put(
     let mut parsed = match parse_pasted(surface, &raw_input, &opts, &saved_at) {
         Ok(parsed) => parsed,
         Err(err) => return super::no_store(paste_error_reply(err)),
+    };
+    let wallet_account = match surface {
+        Surface::OpencodeWallet => match wallet_account {
+            Some(account) if web_session::valid_wallet_account_id(&account) => {
+                parsed.meta.account_id = Some(account.clone());
+                Some(account)
+            }
+            _ => return super::no_store(lifecycle::invalid_action_body()),
+        },
+        Surface::Qwen | Surface::Muse => None,
     };
 
     let Ok(transport) = ReqwestTransport::with_endpoint(Duration::from_secs(15), fixture_endpoint)
@@ -244,7 +259,9 @@ async fn handle_put(
     }
 
     if let Some(usage) = &native.usage {
-        usage.producer.clear_web_session_cache(surface);
+        usage
+            .producer
+            .clear_web_session_cache(surface, wallet_account.as_deref());
     }
     native.changed();
     super::no_store(response(
@@ -450,19 +467,55 @@ async fn handle_delete(native: &NativeOwners, surface: Surface, request: Request
     if !secure {
         return super::no_store(secure_error());
     }
-    if !body.is_empty() {
-        return super::no_store(lifecycle::invalid_action_body());
-    }
+    // One account's wallet session (`{"accountId": "..."}`), the legacy global
+    // session (empty body), or nothing else.
+    let wallet_account = match surface {
+        Surface::OpencodeWallet => match body.get("accountId") {
+            Some(Value::String(s)) if body.len() == 1 => {
+                if web_session::valid_wallet_account_id(s) {
+                    Some(s.clone())
+                } else {
+                    return super::no_store(lifecycle::invalid_action_body());
+                }
+            }
+            None if body.is_empty() => None,
+            _ => return super::no_store(lifecycle::invalid_action_body()),
+        },
+        Surface::Qwen | Surface::Muse => {
+            if !body.is_empty() {
+                return super::no_store(lifecycle::invalid_action_body());
+            }
+            None
+        }
+    };
     let native_clone = native.clone();
+    let queued_account = wallet_account.clone();
     let deleted = native
         .queues
         .run(
             &format!("key:web-session-{}", surface.as_str()),
             async move {
+                let account = queued_account;
                 tokio::task::spawn_blocking(move || {
                     let root = native_clone.agents.root();
-                    let existed = web_session::summary(root, surface).ok().flatten().is_some();
-                    web_session::delete_with_owners(&native_clone.owners, root, surface)?;
+                    let existed = match account.as_deref() {
+                        Some(account) => web_session::summary_for_account(root, surface, account)
+                            .ok()
+                            .flatten()
+                            .is_some(),
+                        None => web_session::summary(root, surface).ok().flatten().is_some(),
+                    };
+                    match account.as_deref() {
+                        Some(account) => web_session::delete_for_account_with_owners(
+                            &native_clone.owners,
+                            root,
+                            surface,
+                            account,
+                        )?,
+                        None => {
+                            web_session::delete_with_owners(&native_clone.owners, root, surface)?
+                        }
+                    }
                     Ok::<_, SessionError>(existed)
                 })
                 .await
@@ -472,17 +525,20 @@ async fn handle_delete(native: &NativeOwners, surface: Surface, request: Request
     match deleted {
         Ok(Ok(Ok(removed))) => {
             if let Some(usage) = &native.usage {
-                usage.producer.clear_web_session_cache(surface);
+                usage
+                    .producer
+                    .clear_web_session_cache(surface, wallet_account.as_deref());
             }
             native.changed();
-            super::no_store(response(
-                200,
-                json!({
-                    "ok": true,
-                    "deleted": removed,
-                    "surface": surface.as_str(),
-                }),
-            ))
+            let mut out = json!({
+                "ok": true,
+                "deleted": removed,
+                "surface": surface.as_str(),
+            });
+            if let Some(account) = wallet_account.as_deref() {
+                out["accountId"] = json!(account);
+            }
+            super::no_store(response(200, out))
         }
         _ => super::no_store(error(
             500,
@@ -699,12 +755,35 @@ mod tests {
         assert_eq!(reply.status(), 422);
         assert!(web_session::load(&root, Surface::Muse).unwrap().is_none());
 
-        // 5. Upstream 401 -> 422 session_rejected, nothing saved, never echoes secret
-        let (bad_endpoint, bad_srv) = spawn_upstream(|_| (401, "{}".into())).await;
+        // 5. An OpenCode wallet paste names its account, or nothing is saved.
         let req = json_request(
             Method::PUT,
             "/api/accounts/web-session/opencode-wallet",
             json!({ "cookie": secret }),
+            browser_access(true, true),
+        );
+        let reply = handle_put(&native, Surface::OpencodeWallet, req, None).await;
+        assert_eq!(reply.status(), 400);
+        let req = json_request(
+            Method::PUT,
+            "/api/accounts/web-session/opencode-wallet",
+            json!({ "cookie": secret, "accountId": "opencode-go:../escape" }),
+            browser_access(true, true),
+        );
+        let reply = handle_put(&native, Surface::OpencodeWallet, req, None).await;
+        assert_eq!(reply.status(), 400);
+        assert!(
+            web_session::load(&root, Surface::OpencodeWallet)
+                .unwrap()
+                .is_none()
+        );
+
+        // 6. Upstream 401 -> 422 session_rejected, nothing saved, never echoes secret
+        let (bad_endpoint, bad_srv) = spawn_upstream(|_| (401, "{}".into())).await;
+        let req = json_request(
+            Method::PUT,
+            "/api/accounts/web-session/opencode-wallet",
+            json!({ "cookie": secret, "accountId": "opencode-go:usage" }),
             browser_access(true, true),
         );
         let reply = handle_put(&native, Surface::OpencodeWallet, req, Some(bad_endpoint)).await;
@@ -714,13 +793,13 @@ mod tests {
         assert!(text.contains("session_rejected"));
         assert!(!text.contains("super-secret-fixture-cookie-999"));
         assert!(
-            web_session::load(&root, Surface::OpencodeWallet)
+            web_session::load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
                 .unwrap()
                 .is_none()
         );
         bad_srv.abort();
 
-        // 6. Multi-workspace -> 409 choose_workspace, nothing saved
+        // 7. Multi-workspace -> 409 choose_workspace, nothing saved
         let (multi_endpoint, multi_srv) = spawn_upstream(|url| {
             if url.ends_with("/orgs") {
                 return (
@@ -740,7 +819,7 @@ mod tests {
         let req = json_request(
             Method::PUT,
             "/api/accounts/web-session/opencode-wallet",
-            json!({ "cookie": secret }),
+            json!({ "cookie": secret, "accountId": "opencode-go:usage" }),
             browser_access(true, true),
         );
         let reply = handle_put(
@@ -756,16 +835,16 @@ mod tests {
         assert_eq!(body["code"], "choose_workspace");
         assert_eq!(body["workspaces"].as_array().unwrap().len(), 2);
         assert!(
-            web_session::load(&root, Surface::OpencodeWallet)
+            web_session::load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
                 .unwrap()
                 .is_none()
         );
 
-        // 7. Verified PUT with workspaceId -> 200, saved 0600, never echoes secret
+        // 8. Verified PUT with workspaceId and accountId -> 200, saved per account
         let req = json_request(
             Method::PUT,
             "/api/accounts/web-session/opencode-wallet",
-            json!({ "cookie": secret, "workspaceId": "wrk_b" }),
+            json!({ "cookie": secret, "workspaceId": "wrk_b", "accountId": "opencode-go:usage" }),
             browser_access(true, true),
         );
         let reply = handle_put(&native, Surface::OpencodeWallet, req, Some(multi_endpoint)).await;
@@ -776,10 +855,22 @@ mod tests {
         assert!(!text.contains("super-secret-fixture-cookie-999"));
         let body: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(body["session"]["workspaceId"], "wrk_b");
+        assert_eq!(body["session"]["accountId"], "opencode-go:usage");
         assert_eq!(body["account"]["windows"][0]["remaining"], 5.0);
+        assert!(
+            web_session::load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            web_session::load(&root, Surface::OpencodeWallet)
+                .unwrap()
+                .is_none()
+        );
         multi_srv.abort();
 
-        // 8. GET returns metadata summary only, zero secret
+        // 9. GET returns metadata summaries only, zero secret; the per-account
+        // wallet session is not the legacy global slot.
         let mut get_req = Request::builder()
             .method(Method::GET)
             .uri("/api/accounts/web-session")
@@ -793,20 +884,24 @@ mod tests {
             String::from_utf8(to_bytes(reply.into_body(), 16384).await.unwrap().to_vec()).unwrap();
         assert!(!text.contains("super-secret-fixture-cookie-999"));
         let body: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(body["sessions"]["opencode-wallet"]["workspaceId"], "wrk_b");
+        assert!(body["sessions"]["opencode-wallet"].is_null());
         assert!(body["sessions"]["qwen"].is_null());
 
-        // 9. DELETE removes session cleanly
+        // 10. DELETE removes one account's session and nothing else
         let del_req = json_request(
             Method::DELETE,
             "/api/accounts/web-session/opencode-wallet",
-            json!({}),
+            json!({ "accountId": "opencode-go:usage" }),
             browser_access(true, true),
         );
         let reply = handle_delete(&native, Surface::OpencodeWallet, del_req).await;
         assert_eq!(reply.status(), 200);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(reply.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(body["deleted"], true);
+        assert_eq!(body["accountId"], "opencode-go:usage");
         assert!(
-            web_session::load(&root, Surface::OpencodeWallet)
+            web_session::load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
                 .unwrap()
                 .is_none()
         );

@@ -245,38 +245,6 @@ impl Producer {
         )
         .await
     }
-
-    /// Force-refresh a pasted-session OpenCode console wallet row (`plan-opencode-go-console-web-*`).
-    pub(crate) async fn recheck_web_wallet(
-        &self,
-        cache: &AccountUsageCache,
-        companions: &CompanionInputs,
-        id: &str,
-    ) -> Result<Option<Value>, Decline> {
-        let Ok(now) = aac_core::UtcMs::now() else {
-            return Err(Decline::Date);
-        };
-        let now_ms = now.get() as i64;
-        let force = {
-            let mut forced = self
-                .recheck_forced
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            forced_refresh(&mut forced, id, now_ms)
-        };
-        let Some(row) = self.wallet(now_ms, force).await else {
-            return Ok(None);
-        };
-        if row["id"].as_str() != Some(id) {
-            return Ok(None);
-        }
-        for desktop in [Desktop::Mac, Desktop::Windows] {
-            for secure in [false, true] {
-                let _ = cache.replace_row(desktop, secure, id, row.clone(), &companions.lifecycle);
-            }
-        }
-        Ok(Some(row))
-    }
 }
 
 #[cfg(test)]

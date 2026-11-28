@@ -222,6 +222,11 @@ pub struct SessionMeta {
     /// Internal SHA-256 pin of `muse-user:<userId>` (never echoed in public summary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_hash: Option<String>,
+    /// The OpenCode Go account this session was pasted for (`opencode-go:...`). `None`
+    /// only on the legacy single-file record, which is still readable but bound to no
+    /// account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 impl SessionMeta {
@@ -247,6 +252,9 @@ impl SessionMeta {
         }
         if let Some(plan) = &self.plan {
             out["plan"] = json!(plan);
+        }
+        if let Some(account_id) = &self.account_id {
+            out["accountId"] = json!(account_id);
         }
         out
     }
@@ -340,6 +348,8 @@ struct DiskRecord {
     plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
     encoding: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secret: Option<SessionSecret>,
@@ -364,6 +374,63 @@ pub fn valid_workspace_id(value: &str) -> bool {
 /// Validate a Muse portal numeric team identifier.
 pub fn valid_team_id(value: &str) -> bool {
     (1..=32).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Validate the OpenCode Go account id a pasted wallet session is bound to
+/// (`opencode-go:usage`, `opencode-go:acct:<8 hex>`, `opencode-go:usage:<8 hex>`):
+/// the surface's provider prefix plus one or two plain selector segments.
+pub fn valid_wallet_account_id(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix(&format!("{}:", Surface::OpencodeWallet.provider_id()))
+    else {
+        return false;
+    };
+    if value.is_empty() || value.len() > 128 {
+        return false;
+    }
+    let segments: Vec<&str> = rest.split(':').collect();
+    (1..=2).contains(&segments.len())
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment.len() <= 64
+                && segment
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphanumeric())
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+        })
+        && !rest.contains("..")
+}
+
+/// Plain filename under `<ccs>/account-usage/sessions/` for one account's OpenCode
+/// wallet session: derived from the account id so no account id ever touches the
+/// filesystem as a path.
+fn wallet_file_name(account_id: &str) -> String {
+    format!(
+        "opencode-wallet-{}.json",
+        &aac_core::sha256_hex(account_id)[..12]
+    )
+}
+
+/// The private file a session must be saved to: a new OpenCode wallet session
+/// requires its account binding, and Qwen/Muse sessions accept none.
+fn session_file_name(surface: Surface, session: &StoredSession) -> Result<String, SessionError> {
+    match surface {
+        Surface::OpencodeWallet => match session.meta.account_id.as_deref() {
+            Some(account_id) if valid_wallet_account_id(account_id) => {
+                Ok(wallet_file_name(account_id))
+            }
+            _ => Err(SessionError::InvalidMetadata),
+        },
+        Surface::Qwen | Surface::Muse => {
+            if session.meta.account_id.is_some() {
+                Err(SessionError::InvalidMetadata)
+            } else {
+                Ok(surface.file_name().to_owned())
+            }
+        }
+    }
 }
 
 /// Validate a 64-character lowercase hex SHA-256 digest.
@@ -663,6 +730,7 @@ fn parse_qwen(
             email: None,
             plan: None,
             user_hash: None,
+            account_id: None,
         },
         secret: SessionSecret::Qwen {
             cookie,
@@ -724,6 +792,7 @@ fn parse_opencode(
             email: None,
             plan: None,
             user_hash: None,
+            account_id: None,
         },
         secret,
     })
@@ -797,6 +866,7 @@ fn parse_muse(
             email: options.email.clone(),
             plan: options.plan.clone(),
             user_hash: options.user_hash.clone(),
+            account_id: None,
         },
         secret,
     })
@@ -834,6 +904,7 @@ fn encode_disk(session: &StoredSession) -> Result<Vec<u8>, SessionError> {
         email: session.meta.email.clone(),
         plan: session.meta.plan.clone(),
         user_hash: session.meta.user_hash.clone(),
+        account_id: session.meta.account_id.clone(),
         encoding,
         secret,
         ciphertext,
@@ -900,6 +971,7 @@ fn decode_disk(surface: Surface, bytes: &[u8]) -> Result<StoredSession, SessionE
             email: record.email,
             plan: record.plan,
             user_hash: record.user_hash,
+            account_id: record.account_id,
         },
         secret,
     })
@@ -926,6 +998,9 @@ fn validate_loaded(
             if let Some(gw) = gateway_cookie {
                 let _ = parse_cookie_pairs(gw)?;
             }
+            if record.account_id.is_some() {
+                return Err(SessionError::StorageUnavailable);
+            }
             Ok(())
         }
         (Surface::OpencodeWallet, SessionSecret::OpencodeWallet { cookies }) => {
@@ -940,6 +1015,11 @@ fn validate_loaded(
             }
             if let Some(ws) = record.workspace_id.as_deref()
                 && !valid_workspace_id(ws)
+            {
+                return Err(SessionError::StorageUnavailable);
+            }
+            if let Some(account_id) = record.account_id.as_deref()
+                && !valid_wallet_account_id(account_id)
             {
                 return Err(SessionError::StorageUnavailable);
             }
@@ -977,6 +1057,9 @@ fn validate_loaded(
             {
                 return Err(SessionError::StorageUnavailable);
             }
+            if record.account_id.is_some() {
+                return Err(SessionError::StorageUnavailable);
+            }
             Ok(())
         }
         _ => Err(SessionError::StorageUnavailable),
@@ -993,10 +1076,11 @@ pub fn save_with_owners(
     if session.meta.surface != surface.as_str() {
         return Err(SessionError::InvalidMetadata);
     }
+    let file_name = session_file_name(surface, session)?;
     let bytes = encode_disk(session)?;
     let rows = registry::rows().map_err(|_| SessionError::StorageUnavailable)?;
     let store = owners
-        .claim(rows, ROW_ID, root, Some(surface.file_name()))
+        .claim(rows, ROW_ID, root, Some(file_name.as_str()))
         .map_err(|_| SessionError::StorageUnavailable)?;
     store
         .write(&bytes)
@@ -1012,8 +1096,9 @@ pub fn save_as_agent(
     if session.meta.surface != surface.as_str() {
         return Err(SessionError::InvalidMetadata);
     }
+    let file_name = session_file_name(surface, session)?;
     let bytes = encode_disk(session)?;
-    let store = registry::claim_as_agent(ROW_ID, root, Some(surface.file_name()))
+    let store = registry::claim_as_agent(ROW_ID, root, Some(file_name.as_str()))
         .map_err(|_| SessionError::StorageUnavailable)?;
     store
         .write(&bytes)
@@ -1040,11 +1125,55 @@ pub fn delete_as_agent(root: &Path, surface: Surface) -> Result<(), SessionError
     store.remove().map_err(|_| SessionError::StorageUnavailable)
 }
 
+/// Delete one account's OpenCode wallet session under the Rust service's lease.
+pub fn delete_for_account_with_owners(
+    owners: &Owners,
+    root: &Path,
+    surface: Surface,
+    account_id: &str,
+) -> Result<(), SessionError> {
+    if surface != Surface::OpencodeWallet || !valid_wallet_account_id(account_id) {
+        return Err(SessionError::InvalidMetadata);
+    }
+    let rows = registry::rows().map_err(|_| SessionError::StorageUnavailable)?;
+    let store = owners
+        .claim(
+            rows,
+            ROW_ID,
+            root,
+            Some(wallet_file_name(account_id).as_str()),
+        )
+        .map_err(|_| SessionError::StorageUnavailable)?;
+    store.remove().map_err(|_| SessionError::StorageUnavailable)
+}
+
+/// Delete one account's OpenCode wallet session under the host agent's lease.
+pub fn delete_for_account_as_agent(
+    root: &Path,
+    surface: Surface,
+    account_id: &str,
+) -> Result<(), SessionError> {
+    if surface != Surface::OpencodeWallet || !valid_wallet_account_id(account_id) {
+        return Err(SessionError::InvalidMetadata);
+    }
+    let store = registry::claim_as_agent(ROW_ID, root, Some(wallet_file_name(account_id).as_str()))
+        .map_err(|_| SessionError::StorageUnavailable)?;
+    store.remove().map_err(|_| SessionError::StorageUnavailable)
+}
+
 /// Load a stored web session through the hardened private-file reader.
 pub fn load(root: &Path, surface: Surface) -> Result<Option<StoredSession>, SessionError> {
+    load_named(root, surface, surface.file_name())
+}
+
+fn load_named(
+    root: &Path,
+    surface: Surface,
+    file_name: &str,
+) -> Result<Option<StoredSession>, SessionError> {
     let row = registry::row(ROW_ID).map_err(|_| SessionError::StorageUnavailable)?;
     let relative = row
-        .file(Some(surface.file_name()))
+        .file(Some(file_name))
         .map_err(|_| SessionError::StorageUnavailable)?;
     let file = root.join(relative);
     let policy = ReadPolicy::capped(row.max_bytes)
@@ -1063,9 +1192,33 @@ pub fn load(root: &Path, surface: Surface) -> Result<Option<StoredSession>, Sess
     }
 }
 
+/// Load one OpenCode Go account's pasted wallet session. A file whose recorded
+/// binding does not match the requested account reads as absent, never as another
+/// account's session.
+pub fn load_for_account(
+    root: &Path,
+    surface: Surface,
+    account_id: &str,
+) -> Result<Option<StoredSession>, SessionError> {
+    if surface != Surface::OpencodeWallet || !valid_wallet_account_id(account_id) {
+        return Err(SessionError::InvalidMetadata);
+    }
+    let stored = load_named(root, surface, &wallet_file_name(account_id))?;
+    Ok(stored.filter(|stored| stored.meta.account_id.as_deref() == Some(account_id)))
+}
+
 /// Read only the non-secret metadata summary for one surface.
 pub fn summary(root: &Path, surface: Surface) -> Result<Option<SessionMeta>, SessionError> {
     Ok(load(root, surface)?.map(|stored| stored.meta))
+}
+
+/// Read only the non-secret metadata summary for one account's wallet session.
+pub fn summary_for_account(
+    root: &Path,
+    surface: Surface,
+    account_id: &str,
+) -> Result<Option<SessionMeta>, SessionError> {
+    Ok(load_for_account(root, surface, account_id)?.map(|stored| stored.meta))
 }
 
 /// Read non-secret metadata summaries for every supported surface.
@@ -1355,5 +1508,114 @@ mod tests {
             load(&root, Surface::Qwen).unwrap_err(),
             SessionError::StorageUnavailable
         );
+    }
+
+    /// Each OpenCode Go account pastes its own console session: two accounts keep
+    /// independent files, the legacy single file still decodes, and a new save without
+    /// an account binding is refused.
+    #[test]
+    fn opencode_per_account_sessions_round_trip_and_legacy_keeps_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut first = parse_pasted(
+            Surface::OpencodeWallet,
+            "auth=auth-val-1",
+            &PasteOptions::default(),
+            "2026-11-26T20:00:00Z",
+        )
+        .unwrap();
+        first.meta.account_id = Some("opencode-go:usage".to_owned());
+        let mut second = parse_pasted(
+            Surface::OpencodeWallet,
+            "auth=auth-val-2",
+            &PasteOptions::default(),
+            "2026-11-26T20:01:00Z",
+        )
+        .unwrap();
+        second.meta.account_id = Some("opencode-go:acct:52f3251b".to_owned());
+
+        save_as_agent(&root, Surface::OpencodeWallet, &first).unwrap();
+        save_as_agent(&root, Surface::OpencodeWallet, &second).unwrap();
+        assert!(load(&root, Surface::OpencodeWallet).unwrap().is_none());
+        let loaded_first = load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
+            .unwrap()
+            .unwrap();
+        let loaded_second =
+            load_for_account(&root, Surface::OpencodeWallet, "opencode-go:acct:52f3251b")
+                .unwrap()
+                .unwrap();
+        assert_eq!(loaded_first.secret, first.secret);
+        assert_eq!(loaded_second.secret, second.secret);
+        assert_eq!(
+            loaded_first.meta.account_id.as_deref(),
+            Some("opencode-go:usage")
+        );
+        assert_eq!(
+            loaded_first.meta.public_summary()["accountId"],
+            "opencode-go:usage"
+        );
+
+        // Deleting one account's session leaves the other's file untouched.
+        delete_for_account_as_agent(&root, Surface::OpencodeWallet, "opencode-go:usage").unwrap();
+        assert!(
+            load_for_account(&root, Surface::OpencodeWallet, "opencode-go:usage")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            load_for_account(&root, Surface::OpencodeWallet, "opencode-go:acct:52f3251b")
+                .unwrap()
+                .is_some()
+        );
+
+        // A file whose bytes belong to another account is not adopted (no guessing).
+        let spare = parse_pasted(
+            Surface::OpencodeWallet,
+            "auth=auth-val-3",
+            &PasteOptions::default(),
+            "2026-11-26T20:02:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            save_as_agent(&root, Surface::OpencodeWallet, &spare),
+            Err(SessionError::InvalidMetadata)
+        );
+
+        // The pre-per-account single file (no account binding) still decodes.
+        let legacy = std::fs::read_dir(root.join("account-usage/sessions"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(legacy, 1, "only the second account file remains");
+        let legacy_bytes = br#"{"version":1,"surface":"opencode-wallet","fingerprint":"sha256:0123456789abcdef","storedAt":"2026-11-25T10:00:00Z","cookieCount":1,"encoding":"plain","secret":{"kind":"opencode-wallet","cookies":[{"name":"auth","value":"auth-val-legacy"}]}}"#;
+        let legacy_path = root.join("account-usage/sessions/opencode-wallet.json");
+        std::fs::write(&legacy_path, legacy_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&legacy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let legacy_loaded = load(&root, Surface::OpencodeWallet)
+            .unwrap()
+            .expect("legacy global session still loads");
+        assert_eq!(legacy_loaded.meta.account_id, None);
+
+        // Two accounts never share one file, and Qwen/Muse refuse account bindings.
+        assert_eq!(
+            load_for_account(&root, Surface::Qwen, "opencode-go:usage"),
+            Err(SessionError::InvalidMetadata)
+        );
+        assert!(!valid_wallet_account_id("opencode-go:"));
+        assert!(!valid_wallet_account_id("opencode-go:../escape"));
+        assert!(!valid_wallet_account_id("muse:usage"));
+        assert!(valid_wallet_account_id("opencode-go:usage"));
+        assert!(valid_wallet_account_id("opencode-go:usage:cccccccc"));
+        assert!(valid_wallet_account_id("opencode-go:acct:52f3251b"));
     }
 }

@@ -158,7 +158,6 @@ fn evaluate(request: Request) -> Option<Value> {
             key_provider,
         } => match (kind.as_str(), provider.as_str()) {
             ("claude", _) => json!({"guide":{"kind":"open-app","platforms":["mac","windows"]}}),
-            ("wallet", _) => json!({"guide":{"kind":"browser-extension","platform":"mac"}}),
             ("additional", "cursor") => {
                 let platforms: Vec<_> = platform
                     .filter(|platform| platform != "ubuntu")

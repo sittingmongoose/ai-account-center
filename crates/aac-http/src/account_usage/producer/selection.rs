@@ -154,7 +154,7 @@ impl Producer {
             .buffered(3)
             .collect()
             .await;
-        let mut result = if problem.is_none() {
+        if problem.is_none() {
             let failover = self.failover();
             one_row_per_identity(
                 read.into_iter()
@@ -173,13 +173,7 @@ impl Producer {
             )
         } else {
             read.into_iter().map(|(_, _, row)| row).collect()
-        };
-        if problem.is_none()
-            && let Some(wallet) = self.wallet(now, force).await
-        {
-            result.push(wallet);
         }
-        result
     }
 
     pub(super) async fn additional_row(
@@ -300,30 +294,27 @@ impl Producer {
         // template is the same `rows::additional` row TS handed the failover service.
         let mut target = super::failover::additional_target(&self.root, source, legacy);
         target.expected_identity = pin.cloned();
-        self.failover().collect(&target, &template()).await
-    }
-
-    /// The OpenCode Zen console wallet row. Without a pasted session it is a `needs_sign_in`
-    /// row only on a computer that had a wallet source configured: B2 retired the wallet's
-    /// browser bridge, and a computer that never had a wallet gets no invented row.
-    pub(super) async fn wallet(&self, now: i64, force: bool) -> Option<Value> {
-        let root = self.root.clone();
-        let wanted = tokio::task::spawn_blocking(move || {
-            matches!(
-                aac_files::web_session::load(
-                    &root,
-                    aac_files::web_session::Surface::OpencodeWallet
-                ),
-                Ok(Some(_))
-            ) || matches!(provider_caches::wallet_source(&root), Ok(Some(_)))
-        })
-        .await
-        .unwrap_or(false);
-        if !wanted {
-            return None;
-        }
-        super::web_sessions::collect_opencode_wallet(&self.root, &self.web_sessions, now, force)
+        let mut row = self.failover().collect(&target, &template()).await;
+        // Each OpenCode Go account carries its own wallet balance as a line inside
+        // its card, from that account's pasted console session. No session, no line.
+        let wallet = if source.provider == "opencode-go" {
+            super::web_sessions::collect_wallet_window(
+                &self.root,
+                &self.web_sessions,
+                source,
+                now,
+                force,
+            )
             .await
+        } else {
+            None
+        };
+        if let Some(window) = wallet
+            && let Some(windows) = row["windows"].as_array_mut()
+        {
+            windows.push(window)
+        }
+        row
     }
 
     async fn cursor_quota(&self, now: i64, mut row: Value, force: bool) -> Option<Value> {

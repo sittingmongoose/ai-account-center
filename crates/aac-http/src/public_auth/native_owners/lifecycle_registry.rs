@@ -169,7 +169,7 @@ fn listing(
         {
             return json!({"kind":"stored-key","row":row});
         }
-        json!({"kind":"other","row":row,"running":running,"walletRemove":id.starts_with("plan-opencode-go-console-")})
+        json!({"kind":"other","row":row,"running":running})
     }).collect::<Vec<_>>();
     let trash = crate::claude_account_store::list_trash(root).unwrap_or_default();
     aac_views::registry::compose(&json!({
@@ -513,6 +513,9 @@ mod tests {
             [
                 ("recheck", "opencode-go:usage:cccccccc", true),
                 ("remove", "opencode-go:usage:cccccccc", false),
+                // An unnamed stored key binds its own wallet by its pinned id:
+                // pasting one console session for it is non-destructive.
+                ("paste-session", "opencode-go:usage:cccccccc", true),
             ]
         );
         assert!(
@@ -526,7 +529,9 @@ mod tests {
                 .as_array()
                 .expect("actions")
                 .iter()
-                .any(|a| a["enabled"] == true && a["act"] != "recheck"),
+                .any(|a| {
+                    a["enabled"] == true && a["act"] != "recheck" && a["act"] != "paste-session"
+                }),
             "no destructive action enabled on unnamed stored key"
         );
         let acct2 = rows

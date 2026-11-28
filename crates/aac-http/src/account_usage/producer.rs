@@ -108,8 +108,13 @@ impl Producer {
     }
 
     /// Clear cached web-session reading and cooldown state for one surface after a save/delete.
-    pub(crate) fn clear_web_session_cache(&self, surface: aac_files::web_session::Surface) {
-        self.web_sessions.clear(surface);
+    /// `account` names one OpenCode Go account's wallet, `None` a global surface.
+    pub(crate) fn clear_web_session_cache(
+        &self,
+        surface: aac_files::web_session::Surface,
+        account: Option<&str>,
+    ) {
+        self.web_sessions.clear(surface, account);
     }
 
     /// Point the renewal snapshot's homes at a fixture root (tests only).

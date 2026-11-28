@@ -1930,8 +1930,7 @@ async fn serve_inner(
     }
     if boot.native_lifecycle
         && (native.is_none()
-            || owners.owner("account-registry") != Some(registry::Role::RustService)
-            || owners.owner("opencode-wallet-source") != Some(registry::Role::RustService))
+            || owners.owner("account-registry") != Some(registry::Role::RustService))
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

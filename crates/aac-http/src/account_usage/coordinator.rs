@@ -202,31 +202,11 @@ fn email_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
     }
 }
 
-fn wallet_matches(target: &UsageFailoverTarget, candidate: &UsageCandidate) -> bool {
-    if target.provider != "opencode-wallet" {
-        return true;
-    }
-    let suffix = target
-        .account_id
-        .strip_prefix("plan-opencode-go-console-mac-");
-    match suffix {
-        Some(s)
-            if s.len() == 12
-                && s.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
-        {
-            candidate.identity.kind == "opencode-workspace" && candidate.identity.key.starts_with(s)
-        }
-        _ => false,
-    }
-}
-
 fn candidate_matches_target(target: &UsageFailoverTarget, candidate: &UsageCandidate) -> bool {
-    wallet_matches(target, candidate)
-        && target
-            .expected_identity
-            .as_ref()
-            .is_none_or(|expected| same_identity(Some(expected), Some(&candidate.identity)))
+    target
+        .expected_identity
+        .as_ref()
+        .is_none_or(|expected| same_identity(Some(expected), Some(&candidate.identity)))
         && candidate
             .email
             .as_deref()
@@ -1440,7 +1420,6 @@ impl FailoverCoordinator {
         primaries: &[(UsageHost, UsageCandidate)],
     ) -> &'static str {
         if !self.matches_identity(target, state.identity.as_ref(), candidate, &host.host)
-            || !wallet_matches(target, candidate)
             || candidate
                 .email
                 .as_deref()
